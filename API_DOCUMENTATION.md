@@ -472,6 +472,7 @@ Authenticate user.
 Получение списка цен на ингредиенты.
 
 Returns prices for the resolved workspace. Use `X-Workspace-ID` to select a workspace, or omit it to use the default personal workspace.
+Price `quantity` is a JSON number and may be decimal, for example `2.5`.
 
 **Query Parameters:**
 - `ingredient_id` (optional) - Фильтрация по ID ингредиента
@@ -483,7 +484,7 @@ Returns prices for the resolved workspace. Use `X-Workspace-ID` to select a work
     "id": 1,
     "ingredient_id": 1,
     "price": 450.00,
-    "quantity": 1,
+    "quantity": 2.5,
     "unit": "kg",
     "date": "2024-01-01T00:00:00Z",
     "user_id": 1,
@@ -503,13 +504,14 @@ Returns prices for the resolved workspace. Use `X-Workspace-ID` to select a work
 Добавление новой цены для ингредиента.
 
 Creates a price in the resolved workspace. The request body does not accept `workspace_id`; it is taken from `X-Workspace-ID` or the default personal workspace.
+Price `quantity` must be greater than zero and may be decimal.
 
 **Request Body:**
 ```json
 {
   "ingredient_id": 1,
   "price": 500.00,
-  "quantity": 1,
+  "quantity": 2.5,
   "unit": "kg",
   "date": "2024-01-01T00:00:00Z"
 }
@@ -521,7 +523,7 @@ Creates a price in the resolved workspace. The request body does not accept `wor
   "id": 2,
   "ingredient_id": 1,
   "price": 500.00,
-  "quantity": 1,
+  "quantity": 2.5,
   "unit": "kg",
   "date": "2024-01-01T00:00:00Z",
   "user_id": 1,

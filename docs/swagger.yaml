@@ -385,8 +385,7 @@ definitions:
         minimum: 0
         type: number
       quantity:
-        minimum: 1
-        type: integer
+        type: number
       unit:
         type: string
       updated_at:
@@ -414,13 +413,13 @@ definitions:
         minimum: 0
         type: number
       quantity:
-        minimum: 1
-        type: integer
+        type: number
       unit:
         type: string
     required:
     - ingredient_id
     - price
+    - quantity
     type: object
   models.Product:
     properties:

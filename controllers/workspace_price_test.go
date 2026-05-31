@@ -47,6 +47,7 @@ func setupWorkspacePriceTest(t *testing.T) workspacePriceFixture {
 		&models.Workspace{},
 		&models.WorkspaceMember{},
 		&models.Ingredient{},
+		&models.WorkspaceIngredient{},
 		&models.Price{},
 		&models.Recipe{},
 		&models.RecipeIngredient{},
@@ -265,6 +266,67 @@ func TestGetRecipeCostSumsMixedUnitIngredientCosts(t *testing.T) {
 	assertRecipeIngredientCost(t, recipe, tray.ID, 4)
 }
 
+func TestAddPriceAcceptsDecimalQuantity(t *testing.T) {
+	fixture := setupWorkspacePriceTest(t)
+
+	response := runWorkspaceJSONRequest(
+		fixture.User.ID,
+		fixture.PersonalWorkspace.ID,
+		AddPrice,
+		http.MethodPost,
+		"/prices",
+		"/prices",
+		models.PriceCreateDTO{
+			IngredientID: fixture.Ingredient.ID,
+			Price:        12,
+			Quantity:     2.5,
+			Unit:         "kg",
+			Date:         time.Now(),
+		},
+	)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("add decimal price status = %d body = %s", response.Code, response.Body.String())
+	}
+	var created models.Price
+	if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode decimal price response: %v", err)
+	}
+	if created.Quantity != 2.5 {
+		t.Fatalf("created quantity = %v, want 2.5", created.Quantity)
+	}
+
+	pricesResponse := runWorkspaceRequest(
+		fixture.User.ID,
+		fixture.PersonalWorkspace.ID,
+		GetPrices,
+		http.MethodGet,
+		"/prices",
+		"/prices?ingredient_id="+uintToString(fixture.Ingredient.ID),
+	)
+	if pricesResponse.Code != http.StatusOK {
+		t.Fatalf("get prices status = %d body = %s", pricesResponse.Code, pricesResponse.Body.String())
+	}
+	prices := decodePrices(t, pricesResponse)
+	if len(prices) != 1 {
+		t.Fatalf("price count = %d, want 1", len(prices))
+	}
+	if prices[0].Quantity != 2.5 {
+		t.Fatalf("stored quantity = %v, want 2.5", prices[0].Quantity)
+	}
+}
+
+func TestGetRecipeCostUsesDecimalPriceQuantity(t *testing.T) {
+	fixture := setupWorkspacePriceTest(t)
+
+	createPriceWithUnit(t, fixture.User.ID, fixture.PersonalWorkspace.ID, fixture.Ingredient.ID, 10, 2.5, "kg")
+
+	recipe := getRecipeForWorkspace(t, fixture, fixture.PersonalWorkspace.ID)
+	if recipe.TotalCost != 4 {
+		t.Fatalf("decimal quantity recipe total = %v, want 4", recipe.TotalCost)
+	}
+	assertRecipeIngredientCost(t, recipe, fixture.Ingredient.ID, 4)
+}
+
 func TestGetRecipeCostIsZeroWhenWorkspaceHasNoPrice(t *testing.T) {
 	fixture := setupWorkspacePriceTest(t)
 
@@ -288,7 +350,7 @@ func createPrice(t *testing.T, userID uint, workspaceID uint, ingredientID uint,
 	createPriceWithTimes(t, userID, workspaceID, ingredientID, value, time.Now(), time.Time{})
 }
 
-func createPriceWithUnit(t *testing.T, userID uint, workspaceID uint, ingredientID uint, value float64, quantity int, unit string) {
+func createPriceWithUnit(t *testing.T, userID uint, workspaceID uint, ingredientID uint, value float64, quantity float64, unit string) {
 	t.Helper()
 
 	price := models.Price{

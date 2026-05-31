@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Implementation Plan: Decimal Price Quantity</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { margin: 0; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f6f7f9; color: #1f2937; line-height: 1.5; }
+    main { max-width: 1100px; margin: 0 auto; padding: 32px; }
+    section { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 20px; margin: 16px 0; }
+    h1, h2 { line-height: 1.2; margin-top: 0; }
+    code { background: #f3f4f6; padding: 2px 5px; border-radius: 4px; }
+    ul, ol { padding-left: 22px; }
+    li { margin: 6px 0; }
+    .badge { display: inline-block; padding: 4px 10px; border-radius: 999px; background: #e5e7eb; font-size: 12px; font-weight: 600; }
+    .risk { border-left: 4px solid #dc2626; }
+    .approval { border-left: 4px solid #d97706; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Implementation Plan: Decimal Price Quantity</h1>
+  <p class="badge">Approval required before implementation</p>
+
+  <section>
+    <h2>Task Summary</h2>
+    <p>
+      Allow backend price entries to store and calculate non-integer purchase quantities, such as <code>2.5 kg</code> or
+      <code>0.5 l</code>. This supports the mobile price-entry update planned in the sibling mobile repository.
+    </p>
+  </section>
+
+  <section>
+    <h2>Current Behavior</h2>
+    <ul>
+      <li><code>models/price.go</code> defines <code>PriceCreateDTO.Quantity int</code> and <code>Price.Quantity int</code>.</li>
+      <li><code>controllers/prices.go</code> copies the integer quantity directly into new price rows.</li>
+      <li><code>utils/calculateIngredientCost.go</code> accepts <code>priceQuantity int</code> and converts it to float only inside the calculation.</li>
+      <li><code>database.ConnectDatabase()</code> runs <code>AutoMigrate</code>, indexes, and manual backfills at startup, but no guarded quantity type migration exists.</li>
+      <li>Swagger currently documents <code>models.PriceCreateDTO.quantity</code> and <code>models.Price.quantity</code> as integer fields.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Desired Behavior</h2>
+    <ul>
+      <li><code>POST /api/prices</code> accepts decimal JSON numbers for <code>quantity</code>.</li>
+      <li>Stored price rows preserve decimal quantity values.</li>
+      <li>Recipe cost calculation handles decimal price quantities while keeping existing mass, volume, and count conversion behavior.</li>
+      <li>Existing integer rows continue to work and serialize as JSON numbers.</li>
+      <li>Workspace scoping, strict ingredient membership validation, and deterministic latest-price ordering stay unchanged.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Files Likely to Change</h2>
+    <ul>
+      <li><code>models/price.go</code> - switch price quantity fields to decimal-capable type.</li>
+      <li><code>utils/calculateIngredientCost.go</code> and <code>utils/calculateIngredientCost_test.go</code> - accept and test decimal price quantity.</li>
+      <li><code>controllers/workspace_price_test.go</code> and <code>controllers/workspace_ingredients_test.go</code> - update helpers and add decimal create/read coverage.</li>
+      <li><code>database/database.go</code> or a new database helper - guarded PostgreSQL column type migration for <code>prices.quantity</code>.</li>
+      <li><code>docs/docs.go</code>, <code>docs/swagger.json</code>, and <code>docs/swagger.yaml</code> - regenerate Swagger after model changes.</li>
+      <li><code>docs/ai-plans/2026-05-31-decimal-price-quantity.html</code> - update after implementation.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Implementation Steps</h2>
+    <ol>
+      <li>Add tests that prove decimal price quantity can be created and used in recipe cost calculation.</li>
+      <li>Change <code>PriceCreateDTO.Quantity</code> and <code>Price.Quantity</code> from <code>int</code> to <code>float64</code>.</li>
+      <li>Change <code>CalculateIngredientCost</code> to accept <code>priceQuantity float64</code> and keep the same validation semantics for values less than or equal to zero.</li>
+      <li>Add a startup migration that changes existing PostgreSQL <code>prices.quantity</code> to a decimal-capable type without dropping data.</li>
+      <li>Keep sqlite tests compatible with GORM AutoMigrate.</li>
+      <li>Regenerate Swagger with <code>swag init -g main.go</code>.</li>
+      <li>Run focused tests, then <code>go test ./...</code>, <code>go vet ./...</code>, and update this plan with results.</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>Test Plan</h2>
+    <ul>
+      <li><code>go test ./utils</code></li>
+      <li><code>go test ./controllers -run "Price|Recipe|Workspace"</code></li>
+      <li><code>go test ./...</code></li>
+      <li><code>go vet ./...</code></li>
+      <li><code>go run github.com/swaggo/swag/cmd/swag@v1.16.3 init -g main.go</code> after model changes</li>
+    </ul>
+  </section>
+
+  <section class="risk">
+    <h2>Risks and Edge Cases</h2>
+    <ul>
+      <li>GORM may not safely narrow or alter an existing PostgreSQL integer column through <code>AutoMigrate</code>; use an explicit guarded migration.</li>
+      <li>Changing public JSON schema from integer to number needs coordinated mobile client changes.</li>
+      <li><code>float64</code> is acceptable for quantity, but not a broader money precision fix.</li>
+      <li>Existing custom units remain string-based and should not be reinterpreted as part of this change.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Rollback Plan</h2>
+    <p>
+      Before production deploy, rollback is a normal code revert. After a production schema migration to a wider decimal
+      type, do not automatically narrow <code>prices.quantity</code> back to integer; old integer-only app code can still
+      write integer-compatible values into a decimal column.
+    </p>
+  </section>
+
+  <section>
+    <h2>Open Questions</h2>
+    <ul>
+      <li>Use PostgreSQL <code>double precision</code> to match Go <code>float64</code>, or <code>numeric</code> for stricter stored decimal semantics?</li>
+      <li>Should backend add <code>kom</code> as an alias for <code>pcs</code>, or should the mobile app canonicalize count units to <code>pcs</code> only?</li>
+    </ul>
+  </section>
+
+  <section class="approval">
+    <h2>Approval Gate</h2>
+    <p>
+      Implementation must not start until this plan is explicitly approved. After approval, backend changes should stay
+      scoped to decimal price quantity support, migration handling, tests, and generated API docs.
+    </p>
+  </section>
+
+  <section>
+    <h2>Implementation Results</h2>
+    <ul>
+      <li><code>models.PriceCreateDTO.Quantity</code> and <code>models.Price.Quantity</code> now use <code>float64</code>.</li>
+      <li><code>PriceCreateDTO.Quantity</code> is required and must be greater than zero, so <code>0.5</code> is accepted while <code>0</code> is rejected.</li>
+      <li><code>CalculateIngredientCost</code> now accepts decimal price quantities and keeps the existing unit conversion behavior.</li>
+      <li>A guarded PostgreSQL startup migration changes existing <code>prices.quantity</code> columns to <code>double precision</code> before <code>AutoMigrate</code> runs.</li>
+      <li>SQLite controller tests continue to rely on GORM <code>AutoMigrate</code> for the test schema.</li>
+      <li>Swagger was regenerated after the model change, and price quantity is now documented as a JSON number.</li>
+      <li>The <code>kom</code> count-unit alias remains out of scope for this backend change.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Verification Results</h2>
+    <ul>
+      <li><code>go test ./utils</code> - passed.</li>
+      <li><code>go test ./controllers -run "Price|Recipe|Workspace"</code> - passed.</li>
+      <li><code>go run github.com/swaggo/swag/cmd/swag@v1.16.3 init -g main.go</code> - passed and regenerated Swagger artifacts.</li>
+      <li><code>go test ./...</code> - passed.</li>
+      <li><code>go vet ./...</code> - passed.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Known Limitations and Follow-Up</h2>
+    <ul>
+      <li>This is a quantity precision change, not a broader money precision change; price values still use the existing <code>float64</code> model.</li>
+      <li>The production database migration has not been smoke-tested against live Postgres in this implementation pass.</li>
+      <li>Mobile client updates should send canonical units and decimal JSON numbers for quantity.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

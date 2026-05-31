@@ -9,7 +9,7 @@ func TestCalculateIngredientCost(t *testing.T) {
 	tests := []struct {
 		name              string
 		price             float64
-		priceQuantity     int
+		priceQuantity     float64
 		priceUnit         string
 		recipeQuantityStr string
 		recipeUnit        string
@@ -42,6 +42,15 @@ func TestCalculateIngredientCost(t *testing.T) {
 			recipeQuantityStr: "500",
 			recipeUnit:        "ml",
 			want:              3,
+		},
+		{
+			name:              "decimal price quantity",
+			price:             10,
+			priceQuantity:     2.5,
+			priceUnit:         "kg",
+			recipeQuantityStr: "500",
+			recipeUnit:        "g",
+			want:              2,
 		},
 		{
 			name:              "milliliters to liters",
@@ -139,7 +148,7 @@ func TestCalculateIngredientCost(t *testing.T) {
 func TestCalculateIngredientCostSupportedConversions(t *testing.T) {
 	tests := []struct {
 		name          string
-		priceQuantity int
+		priceQuantity float64
 		priceUnit     string
 		recipeQty     string
 		recipeUnit    string

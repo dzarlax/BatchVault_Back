@@ -8,7 +8,7 @@ import (
 )
 
 // CalculateIngredientCost recalculates the ingredient price taking into account units of measurement
-func CalculateIngredientCost(price float64, priceQuantity int, priceUnit string, recipeQuantityStr string, recipeUnit string) (float64, error) {
+func CalculateIngredientCost(price float64, priceQuantity float64, priceUnit string, recipeQuantityStr string, recipeUnit string) (float64, error) {
 	recipeQuantity, err := strconv.ParseFloat(strings.Replace(recipeQuantityStr, ",", ".", 1), 64)
 	if err != nil {
 		return 0, errors.New("invalid recipe quantity")
@@ -26,7 +26,7 @@ func CalculateIngredientCost(price float64, priceQuantity int, priceUnit string,
 		return 0, fmt.Errorf("incompatible units: %s and %s", priceUnit, recipeUnit)
 	}
 
-	basePriceQuantity := float64(priceQuantity) * priceFactor
+	basePriceQuantity := priceQuantity * priceFactor
 	baseRecipeQuantity := recipeQuantity * recipeFactor
 	unitPrice := price / basePriceQuantity
 
