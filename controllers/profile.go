@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
+	"gorm.io/gorm"
 )
 
 // ChangePasswordRequest represents password change request structure
@@ -62,10 +63,17 @@ func ChangePassword(c *gin.Context) {
 		return
 	}
 
-	// Update user password in database
-	user.Password = string(hashedPassword)
-	if err := database.DB.Save(&user).Error; err != nil {
+	// Update user password and revoke already issued JWTs.
+	result := database.DB.Model(&user).Updates(map[string]interface{}{
+		"password":      string(hashedPassword),
+		"token_version": gorm.Expr("token_version + ?", 1),
+	})
+	if result.Error != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to change password"})
+		return
+	}
+	if result.RowsAffected == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
 		return
 	}
 

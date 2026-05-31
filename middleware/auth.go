@@ -6,13 +6,18 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 	"log"
+	"mobile-backend-go/database"
+	"mobile-backend-go/models"
 	"net/http"
 	"os"
 	"strings"
+
+	"gorm.io/gorm"
 )
 
 type Claims struct {
-	UserID uint `json:"userID"`
+	UserID       uint `json:"userID"`
+	TokenVersion uint `json:"tokenVersion"`
 	jwt.RegisteredClaims
 }
 
@@ -65,6 +70,24 @@ func JWTMiddleware() gin.HandlerFunc {
 		}
 
 		if !token.Valid {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token"})
+			c.Abort()
+			return
+		}
+
+		var user models.User
+		if err := database.DB.Select("id", "token_version").First(&user, claims.UserID).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token"})
+				c.Abort()
+				return
+			}
+			log.Printf("Failed to validate token version for user %d: %v", claims.UserID, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to validate token"})
+			c.Abort()
+			return
+		}
+		if claims.TokenVersion != user.TokenVersion {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token"})
 			c.Abort()
 			return

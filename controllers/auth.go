@@ -19,7 +19,8 @@ import (
 
 // Definition of Claims structure for JWT tokens
 type Claims struct {
-	UserID uint `json:"userID"` // Changed to UserID
+	UserID       uint `json:"userID"` // Changed to UserID
+	TokenVersion uint `json:"tokenVersion"`
 	jwt.RegisteredClaims
 }
 
@@ -121,7 +122,8 @@ func Login(c *gin.Context) {
 	// Token is valid for 24 hours (instead of 72)
 	expirationTime := time.Now().Add(24 * time.Hour)
 	claims := &Claims{
-		UserID: user.ID,
+		UserID:       user.ID,
+		TokenVersion: user.TokenVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expirationTime),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
