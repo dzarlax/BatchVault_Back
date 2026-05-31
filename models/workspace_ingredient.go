@@ -20,6 +20,9 @@ type WorkspaceIngredient struct {
 	Workspace    Workspace      `json:"workspace" gorm:"foreignKey:WorkspaceID"`
 	Ingredient   Ingredient     `json:"ingredient" gorm:"foreignKey:IngredientID"`
 	LatestPrice  *Price         `json:"latest_price,omitempty" gorm:"-"`
+	UnitProfile  string         `json:"unit_profile" gorm:"-"`
+	DefaultUnit  string         `json:"default_unit" gorm:"-"`
+	AllowedUnits []string       `json:"allowed_units" gorm:"-"`
 }
 
 // WorkspaceIngredientCreateDTO represents data for linking an ingredient to a workspace.

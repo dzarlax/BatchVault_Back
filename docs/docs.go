@@ -3518,10 +3518,19 @@ const docTemplate = `{
                 "alias": {
                     "type": "string"
                 },
+                "allowed_units": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "category": {
                     "type": "string"
                 },
                 "created_at": {
+                    "type": "string"
+                },
+                "default_unit": {
                     "type": "string"
                 },
                 "id": {
@@ -3535,6 +3544,9 @@ const docTemplate = `{
                 },
                 "latest_price": {
                     "$ref": "#/definitions/models.Price"
+                },
+                "unit_profile": {
+                    "type": "string"
                 },
                 "updated_at": {
                     "type": "string"

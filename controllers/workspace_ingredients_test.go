@@ -163,6 +163,7 @@ func TestIngredientsCompatibilityAndWorkspaceScope(t *testing.T) {
 	if workspaceIngredients[0].LatestPrice == nil || workspaceIngredients[0].LatestPrice.Price != 10 {
 		t.Fatalf("workspace latest price = %#v, want 10", workspaceIngredients[0].LatestPrice)
 	}
+	assertUnitContract(t, workspaceIngredients[0], constants.UnitProfileFineMass, "g", []string{"g", "kg"})
 }
 
 func TestSearchIngredientsFindsGlobalNonMember(t *testing.T) {
@@ -487,6 +488,7 @@ func TestWorkspaceIngredientEndpointsManageMembership(t *testing.T) {
 	if patched.Alias != alias || patched.Category != category || !patched.Active {
 		t.Fatalf("patched workspace ingredient = %#v, want alias/category and active true", patched)
 	}
+	assertUnitContract(t, patched, constants.UnitProfileFineMass, "g", []string{"g", "kg"})
 
 	active := false
 	partialPatchResponse := runWorkspaceJSONRequest(
@@ -648,6 +650,25 @@ func assertRecipeIngredientCount(t *testing.T, recipeID uint, ingredientID uint,
 	}
 	if count != want {
 		t.Fatalf("recipe ingredient count for recipe=%d ingredient=%d is %d, want %d", recipeID, ingredientID, count, want)
+	}
+}
+
+func assertUnitContract(t *testing.T, workspaceIngredient models.WorkspaceIngredient, wantProfile string, wantDefault string, wantAllowed []string) {
+	t.Helper()
+
+	if workspaceIngredient.UnitProfile != wantProfile {
+		t.Fatalf("unit profile = %q, want %q", workspaceIngredient.UnitProfile, wantProfile)
+	}
+	if workspaceIngredient.DefaultUnit != wantDefault {
+		t.Fatalf("default unit = %q, want %q", workspaceIngredient.DefaultUnit, wantDefault)
+	}
+	if len(workspaceIngredient.AllowedUnits) != len(wantAllowed) {
+		t.Fatalf("allowed units = %#v, want %#v", workspaceIngredient.AllowedUnits, wantAllowed)
+	}
+	for index := range wantAllowed {
+		if workspaceIngredient.AllowedUnits[index] != wantAllowed[index] {
+			t.Fatalf("allowed units = %#v, want %#v", workspaceIngredient.AllowedUnits, wantAllowed)
+		}
 	}
 }
 
