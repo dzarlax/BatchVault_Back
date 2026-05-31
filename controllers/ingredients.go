@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"errors"
+	"mobile-backend-go/constants"
 	"mobile-backend-go/database"
 	"mobile-backend-go/models"
 	"net/http"
@@ -245,6 +246,7 @@ func GetWorkspaceIngredients(c *gin.Context) {
 		return
 	}
 	attachLatestWorkspacePrices(workspaceID, workspaceIngredients)
+	attachWorkspaceIngredientUnitContracts(workspaceIngredients)
 
 	c.JSON(http.StatusOK, workspaceIngredients)
 }
@@ -280,6 +282,11 @@ func AddWorkspaceIngredient(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to link ingredient to workspace"})
 		return
 	}
+	if err := database.DB.Preload("Ingredient").First(workspaceIngredient, workspaceIngredient.ID).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch workspace ingredient"})
+		return
+	}
+	attachWorkspaceIngredientUnitContract(workspaceIngredient)
 
 	c.JSON(http.StatusCreated, workspaceIngredient)
 }
@@ -340,6 +347,7 @@ func UpdateWorkspaceIngredient(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch workspace ingredient"})
 		return
 	}
+	attachWorkspaceIngredientUnitContract(&workspaceIngredient)
 
 	c.JSON(http.StatusOK, workspaceIngredient)
 }
@@ -389,4 +397,20 @@ func attachLatestWorkspacePrices(workspaceID uint, workspaceIngredients []models
 			workspaceIngredients[index].LatestPrice = &latestPrice
 		}
 	}
+}
+
+func attachWorkspaceIngredientUnitContracts(workspaceIngredients []models.WorkspaceIngredient) {
+	for index := range workspaceIngredients {
+		attachWorkspaceIngredientUnitContract(&workspaceIngredients[index])
+	}
+}
+
+func attachWorkspaceIngredientUnitContract(workspaceIngredient *models.WorkspaceIngredient) {
+	contract := constants.ResolveIngredientUnitContract(
+		workspaceIngredient.Ingredient.Type,
+		workspaceIngredient.Category,
+	)
+	workspaceIngredient.UnitProfile = contract.UnitProfile
+	workspaceIngredient.DefaultUnit = contract.DefaultUnit
+	workspaceIngredient.AllowedUnits = contract.AllowedUnits
 }

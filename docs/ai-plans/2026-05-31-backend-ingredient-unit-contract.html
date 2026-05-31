@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Backend Plan: Ingredient Unit Contract</title>
+  <style>
+    body { margin: 0; font-family: Arial, sans-serif; background: #f7f4ef; color: #202124; line-height: 1.5; }
+    main { max-width: 1040px; margin: 0 auto; padding: 32px 20px 48px; }
+    h1 { margin: 0 0 8px; font-size: 30px; }
+    h2 { margin: 0 0 12px; font-size: 20px; }
+    section { background: #fff; border: 1px solid #ded8ce; border-radius: 8px; padding: 18px; margin: 14px 0; }
+    code { background: #f0eee9; padding: 1px 5px; border-radius: 4px; }
+    pre { background: #18191b; color: #f5f5f5; padding: 14px; border-radius: 8px; overflow: auto; }
+    li { margin: 6px 0; }
+    .meta { color: #5f6673; }
+    .stop { color: #9f2638; font-weight: 700; }
+    .done { color: #1f6f43; font-weight: 700; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Backend Plan: Ingredient Unit Contract</h1>
+  <p class="meta">Repo: <code>D:\Projects\Code\Personal\jerky-vault-back</code>. Branch: <code>codex/backend-ingredient-unit-contract</code>, based on <code>origin/main</code>.</p>
+
+  <section>
+    <h2>Goal</h2>
+    <p>
+      Make backend the source of truth for purchase/recipe unit choices. Clients should receive canonical
+      <code>allowed_units</code> and <code>default_unit</code> for each workspace ingredient instead of guessing from ingredient names or categories.
+    </p>
+  </section>
+
+  <section>
+    <h2>Current Behavior</h2>
+    <ul>
+      <li><code>models.Ingredient</code> has <code>type</code> and <code>name</code>.</li>
+      <li><code>models.WorkspaceIngredient</code> has workspace metadata such as <code>alias</code> and <code>category</code>, plus transient <code>latest_price</code>.</li>
+      <li><code>models.PriceCreateDTO</code> accepts raw <code>unit</code>.</li>
+      <li><code>utils.CalculateIngredientCost</code> already knows dimensions for <code>kg/g</code>, <code>l/ml</code>, <code>pcs</code>, and custom same-unit values.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Desired API Shape</h2>
+    <pre><code>{
+  "id": 123,
+  "workspace_id": 1,
+  "ingredient_id": 45,
+  "category": "spice",
+  "unit_profile": "fine_mass",
+  "default_unit": "g",
+  "allowed_units": ["g", "kg"],
+  "ingredient": { "id": 45, "name": "Salt", "type": "spice" },
+  "latest_price": { "unit": "kg", "quantity": 2.5, "price": 650 }
+}</code></pre>
+    <p>
+      Recommended canonical units: <code>kg</code>, <code>g</code>, <code>l</code>, <code>ml</code>, <code>pcs</code>, <code>hh</code>.
+      Labels remain a client/localization concern.
+    </p>
+  </section>
+
+  <section>
+    <h2>Implementation Steps</h2>
+    <ol>
+      <li>Create a backend unit catalog in <code>constants</code>, with profiles:
+        <code>mass</code>, <code>fine_mass</code>, <code>volume</code>, <code>count</code>, <code>time</code>.</li>
+      <li>Add a resolver that returns <code>unit_profile</code>, <code>default_unit</code>, and <code>allowed_units</code> from <code>ingredient.type</code>/<code>workspace_ingredients.category</code> without DB schema changes.</li>
+      <li>Expose resolved fields in <code>GET /api/workspace-ingredients</code> and returned workspace ingredient objects.</li>
+      <li>Do not add persisted overrides in this pass; there is no product UI for editing them yet.</li>
+      <li>Keep price/recipe writes permissive. Strict validation should wait until clients consume <code>allowed_units</code>.</li>
+      <li>Regenerate Swagger docs after response changes.</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>Likely Files</h2>
+    <ul>
+      <li><code>models/workspace_ingredient.go</code></li>
+      <li><code>constants/unit_profiles.go</code></li>
+      <li><code>controllers/ingredients.go</code></li>
+      <li><code>controllers/workspace_ingredients_test.go</code></li>
+      <li><code>constants/unit_profiles_test.go</code></li>
+      <li><code>docs/swagger.json</code>, <code>docs/swagger.yaml</code>, <code>docs/docs.go</code></li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Tests</h2>
+    <ul>
+      <li><code>go test ./constants ./controllers -run "UnitProfile|WorkspaceIngredient" -count=1</code></li>
+      <li><code>go test ./utils ./database ./controllers</code></li>
+      <li><code>go vet ./...</code></li>
+      <li><code>go build ./...</code></li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Approval Gate</h2>
+    <p class="done">Approved in chat on 2026-05-31: proceed with an additive backend contract implementation.</p>
+  </section>
+
+  <section>
+    <h2>Implementation Result</h2>
+    <ul>
+      <li>Added transient response fields on <code>models.WorkspaceIngredient</code>: <code>unit_profile</code>, <code>default_unit</code>, and <code>allowed_units</code>.</li>
+      <li>Added <code>constants.ResolveIngredientUnitContract</code> with conservative profiles for mass, fine mass, volume, count, and time.</li>
+      <li>Populated the unit contract for workspace ingredient list, create, and update responses.</li>
+      <li>Kept price and recipe writes permissive; no strict validation or DB schema migration was added in this pass.</li>
+      <li>Regenerated Swagger docs after the response model change.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Checks Run</h2>
+    <ul>
+      <li><code>go test ./constants ./controllers -run "UnitProfile|WorkspaceIngredient" -count=1</code></li>
+      <li><code>go test ./utils ./database ./controllers</code></li>
+      <li><code>go vet ./...</code></li>
+      <li><code>go build ./...</code></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>
