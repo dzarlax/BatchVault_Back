@@ -10,7 +10,7 @@ import (
 type PriceCreateDTO struct {
 	IngredientID uint      `json:"ingredient_id" binding:"required"`
 	Price        float64   `json:"price" binding:"required,min=0"`
-	Quantity     int       `json:"quantity" binding:"min=1"`
+	Quantity     float64   `json:"quantity" binding:"required,gt=0"`
 	Unit         string    `json:"unit"`
 	Date         time.Time `json:"date"`
 }
@@ -24,7 +24,7 @@ type Price struct {
 	IngredientID uint           `json:"ingredient_id" binding:"required"`
 	Price        float64        `json:"price" gorm:"not null" binding:"required,min=0"`
 	Unit         string         `json:"unit"`
-	Quantity     int            `json:"quantity" binding:"min=1"`
+	Quantity     float64        `json:"quantity" binding:"gt=0"`
 	Date         time.Time      `json:"date" gorm:"not null" binding:"required"`
 	UserID       uint           `json:"user_id"`
 	WorkspaceID  *uint          `json:"workspace_id,omitempty"`

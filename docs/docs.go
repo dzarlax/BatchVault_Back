@@ -3128,8 +3128,7 @@ const docTemplate = `{
                     "minimum": 0
                 },
                 "quantity": {
-                    "type": "integer",
-                    "minimum": 1
+                    "type": "number"
                 },
                 "unit": {
                     "type": "string"
@@ -3155,7 +3154,8 @@ const docTemplate = `{
             "type": "object",
             "required": [
                 "ingredient_id",
-                "price"
+                "price",
+                "quantity"
             ],
             "properties": {
                 "date": {
@@ -3169,8 +3169,7 @@ const docTemplate = `{
                     "minimum": 0
                 },
                 "quantity": {
-                    "type": "integer",
-                    "minimum": 1
+                    "type": "number"
                 },
                 "unit": {
                     "type": "string"

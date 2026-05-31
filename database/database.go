@@ -39,6 +39,10 @@ func ConnectDatabase() {
 	// Save connection to global variable
 	DB = database
 
+	if err := migratePriceQuantityToDoublePrecision(DB); err != nil {
+		log.Fatal("Price quantity migration error: ", err)
+	}
+
 	// Auto-migrate all models
 	err = DB.AutoMigrate(
 		&models.User{},
