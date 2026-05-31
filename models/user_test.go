@@ -8,9 +8,10 @@ import (
 
 func TestUserJSONDoesNotExposePassword(t *testing.T) {
 	user := User{
-		ID:       1,
-		Username: "alice",
-		Password: "$2a$10$secret-hash",
+		ID:           1,
+		Username:     "alice",
+		Password:     "$2a$10$secret-hash",
+		TokenVersion: 3,
 	}
 
 	data, err := json.Marshal(user)
@@ -19,8 +20,10 @@ func TestUserJSONDoesNotExposePassword(t *testing.T) {
 	}
 
 	body := string(data)
-	if strings.Contains(body, "password") || strings.Contains(body, "secret-hash") {
-		t.Fatalf("user JSON exposed password data: %s", body)
+	for _, forbidden := range []string{"password", "secret-hash", "tokenVersion", "token_version"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("user JSON exposed %q in body: %s", forbidden, body)
+		}
 	}
 	if !strings.Contains(body, "alice") {
 		t.Fatalf("user JSON did not include username: %s", body)
