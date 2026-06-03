@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Backend Plan: Demo Accounts Seeding</title>
+  <style>
+    body { margin: 0; font-family: Arial, sans-serif; background: #f7f4ef; color: #202124; line-height: 1.5; }
+    main { max-width: 1040px; margin: 0 auto; padding: 32px 20px 48px; }
+    h1 { margin: 0 0 8px; font-size: 30px; }
+    h2 { margin: 0 0 12px; font-size: 20px; }
+    section { background: #fff; border: 1px solid #ded8ce; border-radius: 8px; padding: 18px; margin: 14px 0; }
+    code { background: #f0eee9; padding: 1px 5px; border-radius: 4px; }
+    pre { background: #18191b; color: #f5f5f5; padding: 14px; border-radius: 8px; overflow: auto; }
+    li { margin: 6px 0; }
+    .meta { color: #5f6673; }
+    .stop { color: #9f2638; font-weight: 700; }
+    .ok { color: #1f6f43; font-weight: 700; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Backend Plan: Demo Accounts Seeding</h1>
+  <p class="meta">Repo: <code>D:\Projects\Code\Personal\BatchVault\BatchVault_Back</code>. Date: <code>2026-06-03</code>.</p>
+
+  <section>
+    <h2>Task Summary</h2>
+    <p>
+      Add an explicit manual operation that creates screenshot/demo accounts for English, Serbian, and Russian demos.
+      The operation must populate realistic product data without becoming part of normal application startup,
+      registration, migration, or deployment behavior.
+    </p>
+  </section>
+
+  <section>
+    <h2>Current Behavior</h2>
+    <ul>
+      <li><code>POST /api/auth/register</code> creates a user and calls <code>database.EnsurePersonalWorkspaceForUser</code>.</li>
+      <li><code>database.ConnectDatabase()</code> runs migrations and backfills on every application start.</li>
+      <li>There is no dedicated seed command for demo accounts or localized demo content.</li>
+      <li>Operational records are scoped by <code>workspace_id</code> where migrated and still carry <code>user_id</code> for legacy compatibility.</li>
+      <li>The repository has an English-only rule for code, comments, documentation, API messages, and normal committed text.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Desired Behavior</h2>
+    <ul>
+      <li>Create three manual demo identities: <code>demo-en</code>, <code>demo-sr</code>, and <code>demo-ru</code>.</li>
+      <li>Each identity gets its own personal workspace through the existing workspace helper, not through hand-built workspace rows.</li>
+      <li>Each workspace gets a coherent data story: ingredients, workspace ingredient metadata, prices, recipes, recipe ingredients, packages, products, clients, orders, and cooking sessions.</li>
+      <li>The command is idempotent for demo users: re-running it replaces only the data owned by those demo accounts.</li>
+      <li>The demo dataset has an explicit version and can be refreshed when new product features need additional demo records.</li>
+      <li>The command never runs automatically from <code>main.go</code>, <code>database.ConnectDatabase()</code>, Docker startup, or CI.</li>
+      <li>Localized Russian and Serbian fixture values are allowed only inside this manual demo seeding feature, based on explicit user approval for demo account content.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Refresh and Evolution Model</h2>
+    <ul>
+      <li>Treat demo content as a maintained fixture package, not a one-off migration.</li>
+      <li>Store a demo dataset version, for example <code>demo_dataset_version = "2026-06-03.1"</code>, in the seed code and in a small marker row or metadata record tied to each demo workspace.</li>
+      <li>Support a normal <code>refresh</code> mode that reconciles demo accounts to the current fixture version.</li>
+      <li>Support a stricter <code>reset</code> mode that deletes and recreates all records owned by the demo accounts.</li>
+      <li>When a new feature is added, update the fixture model and bump the dataset version so operators can rerun the command and get the new demo surface.</li>
+      <li>Keep stable demo usernames and passwords so screenshots, app-store review notes, and shared demo instructions do not change every time fixtures are refreshed.</li>
+      <li>Prefer deterministic fixture keys such as slugs or stable names for demo records so refresh logic can update existing demo rows instead of creating duplicates.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Assumptions</h2>
+    <ul>
+      <li>The first implementation can use fixed demo passwords supplied by environment variables, with documented local defaults only if approved.</li>
+      <li>The seed target is a development, staging, or demo database, not a normal production tenant database unless explicitly run by the operator.</li>
+      <li>The demo datasets should be similar in structure across languages so screenshots are comparable.</li>
+      <li>The backend remains responsible for database records; frontend locale switching remains responsible for UI labels and navigation text.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Safety Model</h2>
+    <ul>
+      <li>Require <code>DEMO_SEED_CONFIRM=seed-demo-accounts</code> before making changes.</li>
+      <li>Require <code>DATABASE_URL</code> just like the application.</li>
+      <li>Refuse to run if a target username does not start with <code>demo-</code>.</li>
+      <li>Delete and recreate only records reachable from the selected demo user IDs and their personal workspaces.</li>
+      <li>In <code>refresh</code> mode, update demo-owned records by stable fixture keys and avoid touching non-demo records.</li>
+      <li>In <code>reset</code> mode, require an additional explicit flag such as <code>DEMO_SEED_MODE=reset</code>.</li>
+      <li>Print a summary of created usernames and record counts; do not print password hashes or database credentials.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Likely File Changes</h2>
+    <ul>
+      <li><code>cmd/seed_demo_accounts/main.go</code>: command entrypoint, env validation, transaction orchestration.</li>
+      <li><code>internal/demo_seed/</code> or <code>database/demo_seed.go</code>: reusable seed helpers if the command becomes large.</li>
+      <li><code>internal/demo_seed/fixtures.go</code>: fixture definitions, including localized demo values.</li>
+      <li><code>internal/demo_seed/version.go</code>: current dataset version and refresh/reset mode constants.</li>
+      <li><code>internal/demo_seed/demo_seed_test.go</code>: idempotency and scoping tests.</li>
+      <li><code>README.md</code> or a short docs file: manual operator instructions, only after implementation is approved.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Implementation Steps</h2>
+    <ol>
+      <li>Add a manual Go command under <code>cmd/seed_demo_accounts</code>.</li>
+      <li>Open the database with the same GORM/Postgres stack used by the app, but avoid invoking normal server startup.</li>
+      <li>Run required migrations through existing connection code only if that does not create unwanted side effects; otherwise factor a shared migration helper before seeding.</li>
+      <li>Define demo account fixtures for English, Serbian, and Russian, including username, workspace name, ingredients, recipes, products, clients, orders, and dates.</li>
+      <li>Define stable fixture keys for every seeded entity that may need refresh updates later.</li>
+      <li>Hash passwords with <code>utils.HashPassword</code>.</li>
+      <li>Create users inside transactions and call <code>database.EnsurePersonalWorkspaceForUser</code>.</li>
+      <li>Insert workspace-scoped and user-scoped records consistently, including <code>workspace_id</code> on migrated business tables.</li>
+      <li>Add refresh logic that upserts current fixtures for demo accounts and removes obsolete demo-owned fixture rows when safe.</li>
+      <li>Add reset cleanup logic that removes only previous <code>demo-*</code> records before reseeding.</li>
+      <li>Add focused tests using an isolated test database or sqlite-compatible GORM path if the existing test pattern supports it.</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>Test Plan</h2>
+    <ul>
+      <li><code>go test ./internal/demo_seed ./database ./models</code> if seed helpers live under <code>internal/demo_seed</code>.</li>
+      <li><code>go test ./...</code> to catch model and controller regressions.</li>
+      <li>Manual local dry run against a disposable database.</li>
+      <li>Run the command twice and verify that demo record counts do not duplicate.</li>
+      <li>Change the fixture version in a test fixture and verify refresh updates existing demo rows predictably.</li>
+      <li>Run reset mode and verify it recreates only demo-owned records.</li>
+      <li>Login as each demo account and verify <code>GET /api/workspaces/current</code>, dashboard, recipes, ingredients, prices, products, clients, and orders return populated data.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Manual QA Checklist</h2>
+    <ul>
+      <li>English account screenshots show natural English business data.</li>
+      <li>Serbian account screenshots show natural Serbian business data where demo data is user-entered content.</li>
+      <li>Russian account screenshots show natural Russian business data where demo data is user-entered content.</li>
+      <li>Frontend UI language is verified separately through frontend locale settings.</li>
+      <li>After a fixture version bump, rerun refresh mode and verify new feature data appears in all three demo accounts.</li>
+      <li>No non-demo users or workspaces are modified by a repeated seed run.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Risks</h2>
+    <ul>
+      <li>Cleanup order can violate foreign keys if relationships are deleted in the wrong sequence.</li>
+      <li>Global ingredients are currently name-unique, so localized ingredient names may create shared global rows that outlive demo cleanup.</li>
+      <li>Refresh logic can become fragile if fixtures rely only on translated display names instead of stable keys.</li>
+      <li>Deleting obsolete demo records must respect relationships, otherwise historical demo screens may lose related rows unexpectedly.</li>
+      <li>Russian and Serbian fixture text violates the normal English-only repository rule unless explicitly limited to this approved demo seed path.</li>
+      <li>Running against the wrong database could overwrite existing demo accounts with the same usernames.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Rollback Plan</h2>
+    <ul>
+      <li>Run a cleanup mode that removes only <code>demo-en</code>, <code>demo-sr</code>, and <code>demo-ru</code> owned records.</li>
+      <li>If a refresh version is bad, revert the fixture change and rerun refresh mode against the previous dataset version.</li>
+      <li>If the command has not been run, rollback is just reverting the code changes.</li>
+      <li>If a disposable database was used for screenshots, discard and recreate that database.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Open Questions</h2>
+    <ul>
+      <li>Should demo passwords be fixed and documented locally, or always supplied through env variables?</li>
+      <li>Should fixture data live in Go source for simplicity, or in separate JSON files for easier copy editing?</li>
+      <li>Should this seed a local database only, or also be runnable against the live demo environment?</li>
+      <li>How large should each dataset be for screenshots: minimal clean data, or a fuller dashboard with history?</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Approval Gate</h2>
+    <p class="ok">
+      Approved in chat on 2026-06-03. Implementation proceeded after the user confirmed the plan looked good.
+    </p>
+  </section>
+
+  <section>
+    <h2>Implementation Result</h2>
+    <ul>
+      <li>Added a manual command at <code>cmd/seed_demo_accounts</code>.</li>
+      <li>Added a maintained fixture package under <code>internal/demo_seed</code> with English, Serbian, and Russian demo datasets.</li>
+      <li>Added <code>refresh</code> mode as the default: it keeps demo users and workspaces stable, then replaces operational data for the managed demo workspaces.</li>
+      <li>Added <code>reset</code> mode: it deletes and recreates only the managed <code>demo-*</code> accounts and their owned records.</li>
+      <li>Added <code>DemoSeedMarker</code> records with <code>DatasetVersion</code> so each demo workspace records the fixture version last applied.</li>
+      <li>Added guard validation requiring <code>DEMO_SEED_CONFIRM=seed-demo-accounts</code>.</li>
+      <li>Added operator documentation at <code>docs/demo-accounts.md</code>.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Checks Run</h2>
+    <ul>
+      <li><code>gofmt -w cmd\seed_demo_accounts\main.go internal\demo_seed\fixtures.go internal\demo_seed\seeder.go internal\demo_seed\seeder_test.go</code></li>
+      <li><code>go test ./internal/demo_seed -count=1</code></li>
+      <li><code>go test ./...</code></li>
+      <li><code>go vet ./...</code></li>
+      <li><code>go build ./...</code></li>
+      <li><code>docker compose -f ..\BatchVault_Front\docker-compose.dev.yml up -d backend frontend</code></li>
+      <li><code>DEMO_SEED_CONFIRM=seed-demo-accounts go run ./cmd/seed_demo_accounts</code> inside the dev backend container.</li>
+      <li>Repeated refresh mode inside the dev backend container to verify stable demo workspace IDs and non-duplicating records.</li>
+      <li>API smoke against <code>http://localhost:8080</code> for login, current workspace, dashboard, recipes, products, clients, orders, prices, and workspace ingredients.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Known Limitations</h2>
+    <ul>
+      <li>Refresh mode intentionally replaces demo-owned operational rows rather than doing per-row partial merges; this keeps fixture updates predictable as features evolve.</li>
+      <li>Global ingredient rows are name-unique and are not deleted during demo cleanup, so old renamed demo ingredients may remain as inactive global reference data.</li>
+      <li>The default demo password is suitable for controlled demo environments only; shared or public environments should override passwords with env vars.</li>
+      <li>Live validation was performed only against the dev compose test database, not against production.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>
