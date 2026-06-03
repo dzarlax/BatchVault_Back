@@ -121,6 +121,84 @@ func TestResetRecreatesDemoAccounts(t *testing.T) {
 	}
 }
 
+func TestRefreshIncrementsTokenVersionWhenPasswordIsOverwritten(t *testing.T) {
+	db := setupTestDB(t)
+
+	if _, err := Run(db, Options{Confirm: ConfirmValue, Mode: ModeRefresh}); err != nil {
+		t.Fatalf("first refresh: %v", err)
+	}
+
+	var before models.User
+	if err := db.Where("username = ?", "demo-en").First(&before).Error; err != nil {
+		t.Fatalf("load demo user before password overwrite: %v", err)
+	}
+
+	if _, err := Run(db, Options{
+		Confirm: ConfirmValue,
+		Mode:    ModeRefresh,
+		Passwords: map[string]string{
+			"DEMO_EN_PASSWORD": "new-demo-password",
+		},
+	}); err != nil {
+		t.Fatalf("second refresh with password overwrite: %v", err)
+	}
+
+	var after models.User
+	if err := db.Where("username = ?", "demo-en").First(&after).Error; err != nil {
+		t.Fatalf("load demo user after password overwrite: %v", err)
+	}
+	if after.TokenVersion != before.TokenVersion+1 {
+		t.Fatalf("token version after password overwrite = %d, want %d", after.TokenVersion, before.TokenVersion+1)
+	}
+}
+
+func TestResetDoesNotDeleteSharedWorkspaceMembershipData(t *testing.T) {
+	db := setupTestDB(t)
+
+	if _, err := Run(db, Options{Confirm: ConfirmValue, Mode: ModeRefresh}); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+
+	var demoUser models.User
+	if err := db.Where("username = ?", "demo-en").First(&demoUser).Error; err != nil {
+		t.Fatalf("load demo user: %v", err)
+	}
+
+	owner := models.User{Username: "shared-owner", Password: "hashed"}
+	if err := db.Create(&owner).Error; err != nil {
+		t.Fatalf("create shared owner: %v", err)
+	}
+	ownerID := owner.ID
+	sharedWorkspace := models.Workspace{Name: "Shared workspace", Slug: "shared-workspace", PersonalUserID: &ownerID}
+	if err := db.Create(&sharedWorkspace).Error; err != nil {
+		t.Fatalf("create shared workspace: %v", err)
+	}
+	members := []models.WorkspaceMember{
+		{WorkspaceID: sharedWorkspace.ID, UserID: owner.ID, Role: constants.WorkspaceRoleOwner},
+		{WorkspaceID: sharedWorkspace.ID, UserID: demoUser.ID, Role: constants.WorkspaceRoleViewer},
+	}
+	if err := db.Create(&members).Error; err != nil {
+		t.Fatalf("create shared memberships: %v", err)
+	}
+	client := models.Client{Name: "Shared", Surname: "Customer", UserID: owner.ID, WorkspaceID: &sharedWorkspace.ID}
+	if err := db.Create(&client).Error; err != nil {
+		t.Fatalf("create shared client: %v", err)
+	}
+
+	if _, err := Run(db, Options{Confirm: ConfirmValue, Mode: ModeReset}); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+
+	var loadedWorkspace models.Workspace
+	if err := db.First(&loadedWorkspace, sharedWorkspace.ID).Error; err != nil {
+		t.Fatalf("shared workspace was deleted: %v", err)
+	}
+	var loadedClient models.Client
+	if err := db.First(&loadedClient, client.ID).Error; err != nil {
+		t.Fatalf("shared workspace data was deleted: %v", err)
+	}
+}
+
 func TestRunDoesNotTouchNonDemoUserData(t *testing.T) {
 	db := setupTestDB(t)
 

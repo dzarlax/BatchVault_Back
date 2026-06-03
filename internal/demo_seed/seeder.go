@@ -175,7 +175,10 @@ func ensureDemoUser(tx *gorm.DB, fixture accountFixture, opts Options) (models.U
 	var user models.User
 	err = tx.Where("username = ?", fixture.Username).First(&user).Error
 	if err == nil {
-		if err := tx.Model(&user).Update("password", hashedPassword).Error; err != nil {
+		if err := tx.Model(&user).Updates(map[string]interface{}{
+			"password":      hashedPassword,
+			"token_version": gorm.Expr("token_version + ?", 1),
+		}).Error; err != nil {
 			return models.User{}, false, err
 		}
 		return user, false, nil
@@ -473,19 +476,20 @@ func deleteDemoAccount(tx *gorm.DB, username string) error {
 		return err
 	}
 
-	var workspaceIDs []uint
-	if err := tx.Unscoped().Model(&models.WorkspaceMember{}).
-		Where("user_id = ?", user.ID).
-		Pluck("workspace_id", &workspaceIDs).Error; err != nil {
-		return err
-	}
 	var personalWorkspaceIDs []uint
 	if err := tx.Unscoped().Model(&models.Workspace{}).
 		Where("personal_user_id = ?", user.ID).
 		Pluck("id", &personalWorkspaceIDs).Error; err != nil {
 		return err
 	}
-	workspaceIDs = append(workspaceIDs, personalWorkspaceIDs...)
+	workspaceIDs := append([]uint{}, personalWorkspaceIDs...)
+	var marker DemoSeedMarker
+	err = tx.Unscoped().Where("username = ?", username).First(&marker).Error
+	if err == nil {
+		workspaceIDs = append(workspaceIDs, marker.WorkspaceID)
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
 	workspaceIDs = uniqueUint(workspaceIDs)
 
 	for _, workspaceID := range workspaceIDs {
