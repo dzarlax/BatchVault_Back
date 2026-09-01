@@ -1,16 +1,20 @@
 package controllers
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log"
 	"mobile-backend-go/constants"
 	"mobile-backend-go/database"
 	"mobile-backend-go/models"
+	"mobile-backend-go/services"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 // GetOrder returns an order by ID
@@ -222,6 +226,7 @@ func AddOrder(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to commit transaction"})
 		return
 	}
+	dispatchOrderNotification(services.OrderEventCreated, newOrder.ID, workspaceID)
 
 	// Load full order information
 	var createdOrder models.Order
@@ -322,6 +327,8 @@ func UpdateOrder(c *gin.Context) {
 		return
 	}
 
+	statusTransition := isStatusTransition(existingOrder.Status, requestData.Status)
+
 	// Update order fields
 	existingOrder.ClientID = requestData.ClientID
 	if !requestData.Date.IsZero() {
@@ -389,6 +396,9 @@ func UpdateOrder(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to commit transaction"})
 		return
 	}
+	if statusTransition {
+		dispatchOrderNotification(orderNotificationType(requestData.Status), existingOrder.ID, workspaceID)
+	}
 
 	// Return success response
 	c.JSON(http.StatusOK, gin.H{"message": "Order updated successfully"})
@@ -435,6 +445,17 @@ func UpdateOrderStatus(c *gin.Context) {
 		return
 	}
 
+	var existingOrder models.Order
+	if err := database.DB.Select("id", "status").Where("id = ? AND workspace_id = ?", orderID, workspaceID).First(&existingOrder).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Order not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update order status"})
+		}
+		return
+	}
+	statusTransition := isStatusTransition(existingOrder.Status, requestBody.Status)
+
 	result := database.DB.Model(&models.Order{}).Where("id = ? AND workspace_id = ?", orderID, workspaceID).Update("status", requestBody.Status)
 	if result.Error != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update order status"})
@@ -443,6 +464,10 @@ func UpdateOrderStatus(c *gin.Context) {
 	if result.RowsAffected == 0 {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Order not found"})
 		return
+	}
+
+	if statusTransition {
+		dispatchOrderNotification(orderNotificationType(requestBody.Status), uint(orderID), workspaceID)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Order status updated successfully"})
@@ -479,5 +504,23 @@ func DeleteOrder(c *gin.Context) {
 		return
 	}
 
+	dispatchOrderNotification(services.OrderEventCancelled, order.ID, workspaceID)
+
 	c.JSON(http.StatusOK, gin.H{"message": "Order deleted successfully"})
+}
+
+func dispatchOrderNotification(eventType string, orderID uint, workspaceID uint) {
+	notification := services.OrderNotification{Type: eventType, OrderID: orderID, WorkspaceID: workspaceID}
+	go services.NotifyOrderEvent(context.Background(), notification)
+}
+
+func orderNotificationType(status string) string {
+	if status == constants.OrderStatusCanceled {
+		return services.OrderEventCancelled
+	}
+	return services.OrderEventStatusUpdated
+}
+
+func isStatusTransition(previousStatus string, nextStatus string) bool {
+	return previousStatus != nextStatus
 }

@@ -61,6 +61,7 @@ func ConnectDatabase() {
 		&models.ProductOption{},
 		&models.Order{},
 		&models.OrderItem{},
+		&models.PushDevice{},
 	)
 
 	if err != nil {
@@ -152,6 +153,9 @@ func createIndexes() {
 	DB.Exec(`CREATE INDEX IF NOT EXISTS idx_workspace_members_user_id ON workspace_members(user_id)`)
 	DB.Exec(`CREATE INDEX IF NOT EXISTS idx_workspace_members_workspace_id ON workspace_members(workspace_id)`)
 	DB.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_members_workspace_user ON workspace_members(workspace_id, user_id) WHERE deleted_at IS NULL`)
+
+	// Push Devices: resolve enabled APNs registrations for workspace members.
+	DB.Exec(`CREATE INDEX IF NOT EXISTS idx_push_devices_user_enabled_environment ON push_devices(user_id, enabled, environment)`)
 
 	// Prices: frequently filtered by workspace and ingredient history
 	DB.Exec(`CREATE INDEX IF NOT EXISTS idx_prices_workspace_id ON prices(workspace_id)`)

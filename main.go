@@ -6,6 +6,7 @@ import (
 	_ "mobile-backend-go/docs" // Import for Swagger documentation
 	"mobile-backend-go/middleware"
 	"mobile-backend-go/routes"
+	"mobile-backend-go/services"
 	"os"
 
 	"github.com/gin-contrib/cors"
@@ -41,6 +42,11 @@ func loadEnvVar(key string) string {
 // @in header
 // @name Authorization
 func main() {
+	if err := godotenv.Load(); err != nil {
+		log.Printf("Error loading .env file: %v", err)
+	}
+	services.ConfigureAPNSFromEnvironment()
+
 	// Define required environment variables
 	//requiredEnvVars := []string{"DB_HOST", "DB_USER", "DB_PASSWORD", "DB_NAME", "DB_PORT", "FRONT_URL"}
 	requiredEnvVars := []string{"DATABASE_URL", "FRONT_URL", "JWT_SECRET"}
