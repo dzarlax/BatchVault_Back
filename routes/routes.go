@@ -26,6 +26,8 @@ func SetupRoutes(router *gin.Engine) {
 	{
 		// Workspace routes
 		protectedRoutes.GET("/workspaces", controllers.GetWorkspaces)
+		protectedRoutes.PUT("/push-devices/current", controllers.UpsertCurrentPushDevice)
+		protectedRoutes.DELETE("/push-devices/current", controllers.DisableCurrentPushDevice)
 
 		protectedRoutes.Use(middleware.WorkspaceMiddleware())
 		protectedRoutes.GET("/workspaces/current", controllers.GetCurrentWorkspace)
