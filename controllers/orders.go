@@ -508,18 +508,17 @@ func DeleteOrder(c *gin.Context) {
 		return
 	}
 
-	var order models.Order
-	if err := database.DB.Where("id = ? AND workspace_id = ?", orderID, workspaceID).First(&order).Error; err != nil {
+	result := database.DB.Where("id = ? AND workspace_id = ?", orderID, workspaceID).Delete(&models.Order{})
+	if result.Error != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete order"})
+		return
+	}
+	if result.RowsAffected == 0 {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Order not found"})
 		return
 	}
 
-	if err := database.DB.Delete(&order).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete order"})
-		return
-	}
-
-	dispatchOrderNotification(services.OrderEventCancelled, order.ID, workspaceID)
+	dispatchOrderNotification(services.OrderEventCancelled, uint(orderID), workspaceID)
 
 	c.JSON(http.StatusOK, gin.H{"message": "Order deleted successfully"})
 }

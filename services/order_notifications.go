@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -13,9 +14,11 @@ import (
 )
 
 const (
-	OrderEventCreated       = "order_created"
-	OrderEventStatusUpdated = "order_status_updated"
-	OrderEventCancelled     = "order_cancelled"
+	OrderEventCreated        = "order_created"
+	OrderEventStatusUpdated  = "order_status_updated"
+	OrderEventCancelled      = "order_cancelled"
+	maxConcurrentDeliveries  = 8
+	orderNotificationTimeout = 15 * time.Second
 )
 
 // OrderNotification identifies the persisted order event that should be delivered.
@@ -81,20 +84,49 @@ func (notifier *OrderNotifier) Notify(ctx context.Context, notification OrderNot
 		return err
 	}
 
+	deliveryContext, cancel := context.WithTimeout(ctx, orderNotificationTimeout)
+	defer cancel()
 	payload := orderPayload(notification)
-	for _, device := range devices {
-		err := notifier.delivery.Send(ctx, device.DeviceToken, payload)
-		if IsInvalidDeviceTokenError(err) {
-			if disableErr := notifier.db.WithContext(ctx).Model(&models.PushDevice{}).Where("id = ? AND enabled = ?", device.ID, true).Updates(map[string]interface{}{"enabled": false}).Error; disableErr != nil {
-				log.Printf("Failed to disable stale push device %d", device.ID)
+	jobs := make(chan models.PushDevice)
+	var workers sync.WaitGroup
+	workerCount := min(maxConcurrentDeliveries, len(devices))
+	for range workerCount {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for device := range jobs {
+				notifier.deliverToDevice(deliveryContext, device, payload)
 			}
-			continue
-		}
-		if err != nil {
-			log.Printf("APNs delivery failed for push device %d", device.ID)
+		}()
+	}
+	defer func() {
+		close(jobs)
+		workers.Wait()
+	}()
+
+	for _, device := range devices {
+		select {
+		case <-deliveryContext.Done():
+			return deliveryContext.Err()
+		case jobs <- device:
 		}
 	}
 	return nil
+}
+
+func (notifier *OrderNotifier) deliverToDevice(ctx context.Context, device models.PushDevice, payload APNSPayload) {
+	err := notifier.delivery.Send(ctx, device.DeviceToken, payload)
+	if IsInvalidDeviceTokenError(err) {
+		if disableErr := notifier.db.WithContext(ctx).Model(&models.PushDevice{}).
+			Where("id = ? AND user_id = ? AND environment = ? AND last_seen_at = ? AND enabled = ?", device.ID, device.UserID, device.Environment, device.LastSeenAt, true).
+			Updates(map[string]interface{}{"enabled": false}).Error; disableErr != nil {
+			log.Printf("Failed to disable stale push device %d", device.ID)
+		}
+		return
+	}
+	if err != nil {
+		log.Printf("APNs delivery failed for push device %d", device.ID)
+	}
 }
 
 func orderPayload(notification OrderNotification) APNSPayload {

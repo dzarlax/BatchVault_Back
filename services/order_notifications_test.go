@@ -7,7 +7,9 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/base64"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -24,6 +26,8 @@ type fakeAPNSDelivery struct {
 	environment string
 	errors      map[string]error
 	sent        []recordedPush
+	onSend      func(string)
+	mu          sync.Mutex
 }
 
 func (delivery *fakeAPNSDelivery) Enabled() bool {
@@ -35,6 +39,11 @@ func (delivery *fakeAPNSDelivery) Environment() string {
 }
 
 func (delivery *fakeAPNSDelivery) Send(_ context.Context, deviceToken string, payload APNSPayload) error {
+	if delivery.onSend != nil {
+		delivery.onSend(deviceToken)
+	}
+	delivery.mu.Lock()
+	defer delivery.mu.Unlock()
 	delivery.sent = append(delivery.sent, recordedPush{deviceToken: deviceToken, payload: payload})
 	return delivery.errors[deviceToken]
 }
@@ -140,6 +149,41 @@ func TestOrderNotifierDisablesInvalidDeviceToken(t *testing.T) {
 	}
 	if stored.Enabled {
 		t.Fatalf("invalid push device remained enabled")
+	}
+}
+
+func TestOrderNotifierDoesNotDisableReregisteredDevice(t *testing.T) {
+	db, workspace, actor, _, _ := setupOrderNotificationTest(t)
+	device := models.PushDevice{UserID: actor.ID, DeviceToken: "reregistered-device", Platform: "ios", Environment: "development", Enabled: true, LastSeenAt: time.Now().Add(-time.Minute)}
+	if err := db.Create(&device).Error; err != nil {
+		t.Fatalf("create push device: %v", err)
+	}
+
+	var reRegistrationErr error
+	delivery := &fakeAPNSDelivery{
+		environment: "development",
+		errors:      map[string]error{"reregistered-device": &APNSError{StatusCode: 410, Reason: "Unregistered"}},
+		onSend: func(string) {
+			reRegistrationErr = db.Model(&models.PushDevice{}).Where("id = ?", device.ID).Updates(map[string]interface{}{
+				"environment":  "production",
+				"last_seen_at": time.Now().UTC(),
+				"enabled":      true,
+			}).Error
+		},
+	}
+	if err := NewOrderNotifier(db, delivery).Notify(context.Background(), OrderNotification{Type: OrderEventStatusUpdated, OrderID: 8, WorkspaceID: workspace.ID}); err != nil {
+		t.Fatalf("notify: %v", err)
+	}
+	if reRegistrationErr != nil {
+		t.Fatalf("re-register push device: %v", reRegistrationErr)
+	}
+
+	var stored models.PushDevice
+	if err := db.First(&stored, device.ID).Error; err != nil {
+		t.Fatalf("load push device: %v", err)
+	}
+	if !stored.Enabled || stored.Environment != "production" {
+		t.Fatalf("new device registration was disabled by stale APNs cleanup")
 	}
 }
 
