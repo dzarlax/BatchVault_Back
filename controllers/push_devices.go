@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"encoding/hex"
 	"net/http"
 	"strings"
 	"time"
@@ -39,11 +40,12 @@ func UpsertCurrentPushDevice(c *gin.Context) {
 		return
 	}
 
-	request.DeviceToken = strings.TrimSpace(request.DeviceToken)
-	if !validDeviceToken(request.DeviceToken) {
+	deviceToken, ok := canonicalDeviceToken(request.DeviceToken)
+	if !ok {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid device_token"})
 		return
 	}
+	request.DeviceToken = deviceToken
 
 	now := time.Now().UTC()
 	device := models.PushDevice{
@@ -82,8 +84,8 @@ func DisableCurrentPushDevice(c *gin.Context) {
 		return
 	}
 
-	deviceToken := strings.TrimSpace(request.DeviceToken)
-	if !validDeviceToken(deviceToken) {
+	deviceToken, ok := canonicalDeviceToken(request.DeviceToken)
+	if !ok {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid device_token"})
 		return
 	}
@@ -102,6 +104,13 @@ func pushDeviceDB() *gorm.DB {
 	return database.DB.Session(&gorm.Session{Logger: logger.Default.LogMode(logger.Silent)})
 }
 
-func validDeviceToken(deviceToken string) bool {
-	return len(deviceToken) >= minDeviceTokenLength && len(deviceToken) <= maxDeviceTokenLength
+func canonicalDeviceToken(deviceToken string) (string, bool) {
+	canonicalToken := strings.ToLower(strings.TrimSpace(deviceToken))
+	if len(canonicalToken) < minDeviceTokenLength || len(canonicalToken) > maxDeviceTokenLength || len(canonicalToken)%2 != 0 {
+		return "", false
+	}
+	if _, err := hex.DecodeString(canonicalToken); err != nil {
+		return "", false
+	}
+	return canonicalToken, true
 }

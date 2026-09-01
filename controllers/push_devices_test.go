@@ -66,7 +66,7 @@ func TestUpsertCurrentPushDeviceKeepsOneTokenAndTransfersCurrentUser(t *testing.
 	}
 
 	firstResponse := runPushDeviceRequest(user.ID, UpsertCurrentPushDevice, http.MethodPut, gin.H{
-		"device_token": "01234567890123456789012345678901",
+		"device_token": "ABCDEF0123456789ABCDEF0123456789",
 		"platform":     "ios",
 		"environment":  "development",
 	})
@@ -75,7 +75,7 @@ func TestUpsertCurrentPushDeviceKeepsOneTokenAndTransfersCurrentUser(t *testing.
 	}
 
 	secondResponse := runPushDeviceRequest(secondUser.ID, UpsertCurrentPushDevice, http.MethodPut, gin.H{
-		"device_token": "01234567890123456789012345678901",
+		"device_token": "abcdef0123456789abcdef0123456789",
 		"platform":     "ios",
 		"environment":  "production",
 	})
@@ -90,7 +90,7 @@ func TestUpsertCurrentPushDeviceKeepsOneTokenAndTransfersCurrentUser(t *testing.
 	if len(devices) != 1 {
 		t.Fatalf("push device count = %d, want 1", len(devices))
 	}
-	if devices[0].UserID != secondUser.ID || devices[0].Environment != "production" || !devices[0].Enabled {
+	if devices[0].UserID != secondUser.ID || devices[0].DeviceToken != "abcdef0123456789abcdef0123456789" || devices[0].Environment != "production" || !devices[0].Enabled {
 		t.Fatalf("upsert did not replace the device registration")
 	}
 }
@@ -127,19 +127,26 @@ func TestDisableCurrentPushDeviceOnlyAffectsTheAuthenticatedUser(t *testing.T) {
 }
 
 func TestPushDeviceTokenValidationIsBounded(t *testing.T) {
-	if validDeviceToken("") {
+	if _, ok := canonicalDeviceToken(""); ok {
 		t.Fatalf("empty device token was accepted")
 	}
-	if validDeviceToken("short-device-token") {
+	if _, ok := canonicalDeviceToken("short-device-token"); ok {
 		t.Fatalf("short device token was accepted")
 	}
-	if !validDeviceToken(string(bytes.Repeat([]byte("a"), minDeviceTokenLength))) {
+	if _, ok := canonicalDeviceToken(string(bytes.Repeat([]byte("a"), minDeviceTokenLength))); !ok {
 		t.Fatalf("minimum-length device token was rejected")
 	}
-	if !validDeviceToken(string(bytes.Repeat([]byte("a"), maxDeviceTokenLength))) {
+	if _, ok := canonicalDeviceToken(string(bytes.Repeat([]byte("a"), maxDeviceTokenLength))); !ok {
 		t.Fatalf("maximum-length device token was rejected")
 	}
-	if validDeviceToken(string(bytes.Repeat([]byte("a"), maxDeviceTokenLength+1))) {
+	if _, ok := canonicalDeviceToken(string(bytes.Repeat([]byte("a"), maxDeviceTokenLength+1))); ok {
 		t.Fatalf("oversized device token was accepted")
+	}
+	if _, ok := canonicalDeviceToken(string(bytes.Repeat([]byte("z"), minDeviceTokenLength))); ok {
+		t.Fatalf("non-hex device token was accepted")
+	}
+	canonical, ok := canonicalDeviceToken(" ABCDEF0123456789ABCDEF0123456789 ")
+	if !ok || canonical != "abcdef0123456789abcdef0123456789" {
+		t.Fatalf("device token was not canonicalized")
 	}
 }

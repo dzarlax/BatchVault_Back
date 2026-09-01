@@ -15,6 +15,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // GetOrder returns an order by ID
@@ -327,6 +328,25 @@ func UpdateOrder(c *gin.Context) {
 		return
 	}
 
+	// Start transaction
+	tx := database.DB.Begin()
+	if tx.Error != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update order"})
+		return
+	}
+
+	// Lock the current row while deciding whether this request changes its status.
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ? AND workspace_id = ?", orderID, workspaceID).
+		First(&existingOrder).Error; err != nil {
+		tx.Rollback()
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Order not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update order"})
+		}
+		return
+	}
 	statusTransition := isStatusTransition(existingOrder.Status, requestData.Status)
 
 	// Update order fields
@@ -338,9 +358,6 @@ func UpdateOrder(c *gin.Context) {
 	}
 	existingOrder.Status = requestData.Status
 	existingOrder.Comment = requestData.Comment
-
-	// Start transaction
-	tx := database.DB.Begin()
 
 	// Save updated order
 	if err := tx.Save(&existingOrder).Error; err != nil {
@@ -445,30 +462,28 @@ func UpdateOrderStatus(c *gin.Context) {
 		return
 	}
 
-	var existingOrder models.Order
-	if err := database.DB.Select("id", "status").Where("id = ? AND workspace_id = ?", orderID, workspaceID).First(&existingOrder).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Order not found"})
-		} else {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update order status"})
-		}
-		return
-	}
-	statusTransition := isStatusTransition(existingOrder.Status, requestBody.Status)
-
-	result := database.DB.Model(&models.Order{}).Where("id = ? AND workspace_id = ?", orderID, workspaceID).Update("status", requestBody.Status)
+	result := database.DB.Model(&models.Order{}).
+		Where("id = ? AND workspace_id = ? AND status <> ?", orderID, workspaceID, requestBody.Status).
+		Update("status", requestBody.Status)
 	if result.Error != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update order status"})
 		return
 	}
 	if result.RowsAffected == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Order not found"})
+		var order models.Order
+		if err := database.DB.Select("id").Where("id = ? AND workspace_id = ?", orderID, workspaceID).First(&order).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				c.JSON(http.StatusNotFound, gin.H{"error": "Order not found"})
+			} else {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update order status"})
+			}
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"message": "Order status updated successfully"})
 		return
 	}
 
-	if statusTransition {
-		dispatchOrderNotification(orderNotificationType(requestBody.Status), uint(orderID), workspaceID)
-	}
+	dispatchOrderNotification(orderNotificationType(requestBody.Status), uint(orderID), workspaceID)
 
 	c.JSON(http.StatusOK, gin.H{"message": "Order status updated successfully"})
 }
