@@ -161,5 +161,5 @@ func enforcePushDeviceLimit(db *gorm.DB, userID uint) error {
 	for _, device := range excessDevices {
 		ids = append(ids, device.ID)
 	}
-	return db.Model(&models.PushDevice{}).Where("id IN ?", ids).Updates(map[string]interface{}{"enabled": false, "updated_at": time.Now().UTC()}).Error
+	return db.Where("id IN ?", ids).Delete(&models.PushDevice{}).Error
 }

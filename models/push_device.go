@@ -9,7 +9,7 @@ type PushDevice struct {
 	ID             uint      `json:"id" gorm:"primaryKey"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
-	UserID         uint      `json:"user_id" gorm:"not null;index"`
+	UserID         uint      `json:"user_id" gorm:"not null;index;uniqueIndex:idx_push_devices_user_installation"`
 	InstallationID string    `json:"-" gorm:"not null;uniqueIndex:idx_push_devices_user_installation" swaggerignore:"true"`
 	DeviceToken    string    `json:"-" gorm:"not null;uniqueIndex" swaggerignore:"true"`
 	Platform       string    `json:"platform" gorm:"not null"`

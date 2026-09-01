@@ -175,4 +175,12 @@ func TestUpsertCurrentPushDeviceLimitsActiveDevicesPerUser(t *testing.T) {
 	if activeDeviceCount != maxActivePushDevicesPerUser {
 		t.Fatalf("active device count = %d, want %d", activeDeviceCount, maxActivePushDevicesPerUser)
 	}
+
+	var totalDeviceCount int64
+	if err := database.DB.Model(&models.PushDevice{}).Where("user_id = ?", user.ID).Count(&totalDeviceCount).Error; err != nil {
+		t.Fatalf("count stored push devices: %v", err)
+	}
+	if totalDeviceCount != maxActivePushDevicesPerUser {
+		t.Fatalf("stored device count = %d, want %d", totalDeviceCount, maxActivePushDevicesPerUser)
+	}
 }
