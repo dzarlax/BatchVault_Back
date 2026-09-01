@@ -91,12 +91,12 @@ func setupOrderNotificationTest(t *testing.T) (*gorm.DB, models.Workspace, model
 func TestOrderNotifierFansOutToMemberDevicesIncludingActor(t *testing.T) {
 	db, workspace, actor, member, outsideUser := setupOrderNotificationTest(t)
 	devices := []models.PushDevice{
-		{UserID: actor.ID, DeviceToken: "actor-device-one", Platform: "ios", Environment: "development", Enabled: true},
-		{UserID: actor.ID, DeviceToken: "actor-device-two", Platform: "ios", Environment: "development", Enabled: true},
-		{UserID: member.ID, DeviceToken: "member-device", Platform: "ios", Environment: "development", Enabled: true},
-		{UserID: member.ID, DeviceToken: "disabled-device", Platform: "ios", Environment: "development", Enabled: false},
-		{UserID: member.ID, DeviceToken: "production-device", Platform: "ios", Environment: "production", Enabled: true},
-		{UserID: outsideUser.ID, DeviceToken: "outside-device", Platform: "ios", Environment: "development", Enabled: true},
+		{UserID: actor.ID, InstallationID: "actor-one", DeviceToken: "actor-device-one", Platform: "ios", Environment: "development", Enabled: true},
+		{UserID: actor.ID, InstallationID: "actor-two", DeviceToken: "actor-device-two", Platform: "ios", Environment: "development", Enabled: true},
+		{UserID: member.ID, InstallationID: "member-one", DeviceToken: "member-device", Platform: "ios", Environment: "development", Enabled: true},
+		{UserID: member.ID, InstallationID: "member-disabled", DeviceToken: "disabled-device", Platform: "ios", Environment: "development", Enabled: false},
+		{UserID: member.ID, InstallationID: "member-production", DeviceToken: "production-device", Platform: "ios", Environment: "production", Enabled: true},
+		{UserID: outsideUser.ID, InstallationID: "outside-one", DeviceToken: "outside-device", Platform: "ios", Environment: "development", Enabled: true},
 	}
 	if err := db.Create(&devices).Error; err != nil {
 		t.Fatalf("create push devices: %v", err)

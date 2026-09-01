@@ -3,6 +3,7 @@ package controllers
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -66,18 +67,20 @@ func TestUpsertCurrentPushDeviceKeepsOneTokenAndTransfersCurrentUser(t *testing.
 	}
 
 	firstResponse := runPushDeviceRequest(user.ID, UpsertCurrentPushDevice, http.MethodPut, gin.H{
-		"device_token": "ABCDEF0123456789ABCDEF0123456789",
-		"platform":     "ios",
-		"environment":  "development",
+		"device_token":    "ABCDEF0123456789ABCDEF0123456789",
+		"installation_id": "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA",
+		"platform":        "ios",
+		"environment":     "development",
 	})
 	if firstResponse.Code != http.StatusNoContent {
 		t.Fatalf("first registration status = %d body = %s", firstResponse.Code, firstResponse.Body.String())
 	}
 
 	secondResponse := runPushDeviceRequest(secondUser.ID, UpsertCurrentPushDevice, http.MethodPut, gin.H{
-		"device_token": "abcdef0123456789abcdef0123456789",
-		"platform":     "ios",
-		"environment":  "production",
+		"device_token":    "abcdef0123456789abcdef0123456789",
+		"installation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+		"platform":        "ios",
+		"environment":     "production",
 	})
 	if secondResponse.Code != http.StatusNoContent {
 		t.Fatalf("second registration status = %d body = %s", secondResponse.Code, secondResponse.Body.String())
@@ -148,5 +151,28 @@ func TestPushDeviceTokenValidationIsBounded(t *testing.T) {
 	canonical, ok := canonicalDeviceToken(" ABCDEF0123456789ABCDEF0123456789 ")
 	if !ok || canonical != "abcdef0123456789abcdef0123456789" {
 		t.Fatalf("device token was not canonicalized")
+	}
+}
+
+func TestUpsertCurrentPushDeviceLimitsActiveDevicesPerUser(t *testing.T) {
+	user := setupPushDeviceTest(t)
+	for index := 0; index < maxActivePushDevicesPerUser+1; index++ {
+		response := runPushDeviceRequest(user.ID, UpsertCurrentPushDevice, http.MethodPut, gin.H{
+			"device_token":    fmt.Sprintf("%064x", index+1),
+			"installation_id": fmt.Sprintf("00000000-0000-4000-8000-%012x", index+1),
+			"platform":        "ios",
+			"environment":     "development",
+		})
+		if response.Code != http.StatusNoContent {
+			t.Fatalf("registration %d status = %d body = %s", index, response.Code, response.Body.String())
+		}
+	}
+
+	var activeDeviceCount int64
+	if err := database.DB.Model(&models.PushDevice{}).Where("user_id = ? AND enabled = ?", user.ID, true).Count(&activeDeviceCount).Error; err != nil {
+		t.Fatalf("count active push devices: %v", err)
+	}
+	if activeDeviceCount != maxActivePushDevicesPerUser {
+		t.Fatalf("active device count = %d, want %d", activeDeviceCount, maxActivePushDevicesPerUser)
 	}
 }

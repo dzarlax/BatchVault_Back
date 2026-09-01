@@ -18,6 +18,7 @@ const (
 	OrderEventStatusUpdated  = "order_status_updated"
 	OrderEventCancelled      = "order_cancelled"
 	maxConcurrentDeliveries  = 8
+	maxGlobalAPNSDeliveries  = 16
 	orderNotificationTimeout = 15 * time.Second
 )
 
@@ -42,6 +43,7 @@ func NewOrderNotifier(db *gorm.DB, delivery APNSDelivery) *OrderNotifier {
 var (
 	defaultAPNSDeliveryMu sync.RWMutex
 	defaultAPNSDelivery   APNSDelivery = &APNSClient{}
+	apnsDeliverySlots                  = make(chan struct{}, maxGlobalAPNSDeliveries)
 )
 
 // ConfigureAPNSFromEnvironment reloads the APNs client after environment configuration is available.
@@ -115,6 +117,12 @@ func (notifier *OrderNotifier) Notify(ctx context.Context, notification OrderNot
 }
 
 func (notifier *OrderNotifier) deliverToDevice(ctx context.Context, device models.PushDevice, payload APNSPayload) {
+	select {
+	case apnsDeliverySlots <- struct{}{}:
+		defer func() { <-apnsDeliverySlots }()
+	case <-ctx.Done():
+		return
+	}
 	err := notifier.delivery.Send(ctx, device.DeviceToken, payload)
 	if IsInvalidDeviceTokenError(err) {
 		if disableErr := notifier.db.WithContext(ctx).Model(&models.PushDevice{}).

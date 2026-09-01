@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 	"gorm.io/gorm/logger"
@@ -16,14 +17,16 @@ import (
 )
 
 const (
-	minDeviceTokenLength = 32
-	maxDeviceTokenLength = 512
+	minDeviceTokenLength        = 32
+	maxDeviceTokenLength        = 512
+	maxActivePushDevicesPerUser = 10
 )
 
 type pushDeviceRequest struct {
-	DeviceToken string `json:"device_token" binding:"required"`
-	Platform    string `json:"platform" binding:"required,oneof=ios"`
-	Environment string `json:"environment" binding:"required,oneof=development production"`
+	DeviceToken    string `json:"device_token" binding:"required"`
+	InstallationID string `json:"installation_id" binding:"required"`
+	Platform       string `json:"platform" binding:"required,oneof=ios"`
+	Environment    string `json:"environment" binding:"required,oneof=development production"`
 }
 
 type pushDeviceDeleteRequest struct {
@@ -46,27 +49,47 @@ func UpsertCurrentPushDevice(c *gin.Context) {
 		return
 	}
 	request.DeviceToken = deviceToken
+	installationID, ok := canonicalInstallationID(request.InstallationID)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid installation_id"})
+		return
+	}
 
 	now := time.Now().UTC()
-	device := models.PushDevice{
-		UserID:      userID,
-		DeviceToken: request.DeviceToken,
-		Platform:    request.Platform,
-		Environment: request.Environment,
-		Enabled:     true,
-		LastSeenAt:  now,
-	}
-	if err := pushDeviceDB().Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "device_token"}},
-		DoUpdates: clause.Assignments(map[string]interface{}{
-			"user_id":      userID,
-			"platform":     request.Platform,
-			"environment":  request.Environment,
-			"enabled":      true,
-			"last_seen_at": now,
-			"updated_at":   now,
-		}),
-	}).Create(&device).Error; err != nil {
+	if err := pushDeviceDB().Transaction(func(tx *gorm.DB) error {
+		var user models.User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&user, userID).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("user_id = ? AND installation_id = ? AND device_token <> ?", userID, installationID, request.DeviceToken).Delete(&models.PushDevice{}).Error; err != nil {
+			return err
+		}
+
+		device := models.PushDevice{
+			UserID:         userID,
+			InstallationID: installationID,
+			DeviceToken:    request.DeviceToken,
+			Platform:       request.Platform,
+			Environment:    request.Environment,
+			Enabled:        true,
+			LastSeenAt:     now,
+		}
+		if err := tx.Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "device_token"}},
+			DoUpdates: clause.Assignments(map[string]interface{}{
+				"user_id":         userID,
+				"installation_id": installationID,
+				"platform":        request.Platform,
+				"environment":     request.Environment,
+				"enabled":         true,
+				"last_seen_at":    now,
+				"updated_at":      now,
+			}),
+		}).Create(&device).Error; err != nil {
+			return err
+		}
+		return enforcePushDeviceLimit(tx, userID)
+	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to register push device"})
 		return
 	}
@@ -113,4 +136,30 @@ func canonicalDeviceToken(deviceToken string) (string, bool) {
 		return "", false
 	}
 	return canonicalToken, true
+}
+
+func canonicalInstallationID(installationID string) (string, bool) {
+	parsedID, err := uuid.Parse(strings.TrimSpace(installationID))
+	if err != nil {
+		return "", false
+	}
+	return strings.ToLower(parsedID.String()), true
+}
+
+func enforcePushDeviceLimit(db *gorm.DB, userID uint) error {
+	var excessDevices []models.PushDevice
+	if err := db.Where("user_id = ? AND enabled = ?", userID, true).
+		Order("last_seen_at DESC, id DESC").
+		Offset(maxActivePushDevicesPerUser).
+		Find(&excessDevices).Error; err != nil {
+		return err
+	}
+	if len(excessDevices) == 0 {
+		return nil
+	}
+	ids := make([]uint, 0, len(excessDevices))
+	for _, device := range excessDevices {
+		ids = append(ids, device.ID)
+	}
+	return db.Model(&models.PushDevice{}).Where("id IN ?", ids).Updates(map[string]interface{}{"enabled": false, "updated_at": time.Now().UTC()}).Error
 }
