@@ -2,7 +2,7 @@
 
 Date: 2026-05-28  
 Backend snapshot reviewed: `1f5a853`  
-Repository: `jerky-vault-back`
+Repository: `BatchVault_Back`
 
 ## Purpose
 

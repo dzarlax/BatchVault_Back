@@ -43,6 +43,7 @@ The project uses the following environment variables:
 - `FRONT_URL` - Frontend application URL for CORS
 - `JWT_SECRET` - Secret key for JWT token signing (min 16 characters)
 - `STRICT_WORKSPACE_INGREDIENTS` - Optional feature flag. Set to `true` to require active workspace ingredient membership for new price and recipe-ingredient writes. Defaults to compatibility mode when unset.
+- `WORKSPACE_CURRENCY_UPDATES_ENABLED` - Optional rollout gate. Set to `true` to enable `PATCH /api/workspaces/current`; the endpoint is disabled by default while currency reads remain available.
 
 Environment variables can be defined:
 1. Directly in the system
@@ -54,8 +55,8 @@ API documentation is available via Swagger UI at: `http://localhost:8080/swagger
 ## Container Image
 The backend image is published by GitHub Actions to:
 
-- `ghcr.io/dzarlax/jerky-vault-back:latest`
-- `ghcr.io/dzarlax/jerky-vault-back:<commit-sha>`
+- `ghcr.io/dzarlax/batchvault-back:latest`
+- `ghcr.io/dzarlax/batchvault-back:<commit-sha>`
 
 ## Features
 
@@ -86,6 +87,8 @@ The backend image is published by GitHub Actions to:
 ### Workspaces
 - `GET /api/workspaces` - List workspaces available to the authenticated user
 - `GET /api/workspaces/current` - Get the workspace resolved for the current request
+- `GET /api/currencies` - List supported monetary ISO 4217 currencies
+- `PATCH /api/workspaces/current` - Update the current workspace currency when `WORKSPACE_CURRENCY_UPDATES_ENABLED=true` and the requester is a workspace owner
 
 ### Recipes
 - `GET /api/recipes` - Get all recipes

@@ -44,16 +44,16 @@ go run main.go
 # This mounts backend Go files and runs `go run .` with cached Go module/build volumes.
 # The compose service intentionally uses `sh -c`, not `sh -lc`, because Alpine
 # login shell mode resets PATH and can hide /usr/local/go/bin.
-docker compose -f ../jerky-vault/docker-compose.dev.yml up backend frontend
+docker compose -f ../BatchVault_Front/docker-compose.dev.yml up backend frontend
 
 # After backend source changes, restart the Go runner without rebuilding an image.
-docker compose -f ../jerky-vault/docker-compose.dev.yml restart backend
+docker compose -f ../BatchVault_Front/docker-compose.dev.yml restart backend
 
 # Production-like backend image check from the frontend repository.
-docker compose -f ../jerky-vault/docker-compose.dev.yml --profile image up -d --build backend-image
+docker compose -f ../BatchVault_Front/docker-compose.dev.yml --profile image up -d --build backend-image
 
 # Build Docker image
-docker build -t jerky-vault-back .
+docker build -t batchvault-back .
 ```
 
 ### Frontend Repository Dev Compose Workflow
