@@ -35,4 +35,6 @@ jobs:
           tags: |
             ghcr.io/dzarlax/jerky-vault-back:latest
             ghcr.io/dzarlax/jerky-vault-back:${{ github.sha }}
+            ghcr.io/dzarlax/batchvault-back:latest
+            ghcr.io/dzarlax/batchvault-back:${{ github.sha }}
           file: Dockerfile

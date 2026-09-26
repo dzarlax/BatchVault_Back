@@ -101,6 +101,11 @@ func TestOrderNotifierFansOutToMemberDevicesIncludingActor(t *testing.T) {
 	if err := db.Create(&devices).Error; err != nil {
 		t.Fatalf("create push devices: %v", err)
 	}
+	if err := db.Model(&models.PushDevice{}).
+		Where("installation_id = ?", "member-disabled").
+		Update("enabled", false).Error; err != nil {
+		t.Fatalf("disable fixture push device: %v", err)
+	}
 
 	delivery := &fakeAPNSDelivery{environment: "development"}
 	notifier := NewOrderNotifier(db, delivery)

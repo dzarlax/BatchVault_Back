@@ -22,6 +22,7 @@ type workspaceMemberLookupRow struct {
 	WorkspaceUpdatedAt time.Time
 	WorkspaceName      string
 	WorkspaceSlug      string
+	WorkspaceCurrency  string
 	AccountID          *uint
 	PersonalUserID     *uint
 }
@@ -127,6 +128,7 @@ SELECT
   w.updated_at AS workspace_updated_at,
   w.name AS workspace_name,
   w.slug AS workspace_slug,
+  w.currency AS workspace_currency,
   w.account_id AS account_id,
   w.personal_user_id AS personal_user_id
 FROM workspace_members wm
@@ -163,6 +165,7 @@ WHERE wm.user_id = ? AND wm.deleted_at IS NULL`
 			UpdatedAt:      row.WorkspaceUpdatedAt,
 			Name:           row.WorkspaceName,
 			Slug:           row.WorkspaceSlug,
+			Currency:       row.WorkspaceCurrency,
 			AccountID:      row.AccountID,
 			PersonalUserID: row.PersonalUserID,
 		},

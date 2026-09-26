@@ -14,6 +14,7 @@ type Workspace struct {
 	DeletedAt      gorm.DeletedAt        `json:"deleted_at,omitempty" gorm:"index" swaggerignore:"true"`
 	Name           string                `json:"name" gorm:"not null" binding:"required,min=1"`
 	Slug           string                `json:"slug" gorm:"not null" binding:"required,min=1"`
+	Currency       string                `json:"currency" gorm:"not null;default:RSD"`
 	AccountID      *uint                 `json:"account_id,omitempty"`
 	PersonalUserID *uint                 `json:"-"`
 	Members        []WorkspaceMember     `json:"members,omitempty" gorm:"foreignKey:WorkspaceID"`

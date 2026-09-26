@@ -82,6 +82,8 @@ definitions:
     properties:
       account_id:
         type: integer
+      currency:
+        type: string
       id:
         type: integer
       name:
@@ -89,6 +91,13 @@ definitions:
       role:
         type: string
       slug:
+        type: string
+    type: object
+  currencycatalog.Currency:
+    properties:
+      code:
+        type: string
+      name:
         type: string
     type: object
   models.Client:
@@ -621,6 +630,8 @@ definitions:
         type: integer
       created_at:
         type: string
+      currency:
+        type: string
       id:
         type: integer
       ingredients:
@@ -1057,6 +1068,28 @@ paths:
       summary: Create a new cooking session
       tags:
       - Cooking Sessions
+  /api/currencies:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/currencycatalog.Currency'
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Get supported currencies
+      tags:
+      - Workspaces
   /api/dashboard:
     get:
       description: Fetch statistics for the dashboard
@@ -2347,6 +2380,56 @@ paths:
       security:
       - BearerAuth: []
       summary: Get current workspace
+      tags:
+      - Workspaces
+    patch:
+      consumes:
+      - application/json
+      parameters:
+      - description: Workspace ID
+        in: header
+        name: X-Workspace-ID
+        type: integer
+      - description: Currency update
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/controllers.WorkspaceResponse'
+        "400":
+          description: Invalid currency
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Workspace owner access required
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Update current workspace currency
       tags:
       - Workspaces
 securityDefinitions:
