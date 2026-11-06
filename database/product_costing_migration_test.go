@@ -46,6 +46,46 @@ func TestProductCostingPostgresMigrationAndCalculation(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { sqlDB, _ := db.DB(); sqlDB.Close() })
+	// Product costing itself may not have been installed on an older database.
+	if err := db.Exec("CREATE TABLE products (id integer primary key, cost numeric)").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec("INSERT INTO products (id, cost) VALUES (1, 5.123), (2, 0)").Error; err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := database.PrepareProductTypes(db); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// GORM installs the missing costing column after product type preparation.
+	if err := db.Migrator().AddColumn(&models.Product{}, "CostMode"); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.PrepareProductTypes(db); err != nil {
+		t.Fatal(err)
+	}
+	var oldRows []struct {
+		ID               uint
+		Cost             float64
+		CostMode         string
+		ProductType      string
+		CompositionBasis *string
+	}
+	if err := db.Table("products").Order("id").Find(&oldRows).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(oldRows) != 2 || oldRows[0].Cost != 5.123 || oldRows[1].Cost != 0 {
+		t.Fatalf("old manual costs changed: %+v", oldRows)
+	}
+	for _, row := range oldRows {
+		if row.CostMode != "manual" || row.ProductType != "standard" || row.CompositionBasis != nil {
+			t.Fatalf("old manual product migration changed: %+v", row)
+		}
+	}
+	if err := db.Exec("DROP TABLE products").Error; err != nil {
+		t.Fatal(err)
+	}
 	// Exercise preparation against a pre-product-type schema before GORM defaults.
 	if err := db.Exec("CREATE TABLE products (id integer primary key, cost_mode text)").Error; err != nil {
 		t.Fatal(err)

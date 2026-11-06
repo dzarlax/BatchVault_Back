@@ -32,7 +32,11 @@ func PrepareProductTypes(db *gorm.DB) error {
 				return err
 			}
 		}
-		if err := tx.Exec("UPDATE products SET product_type = CASE WHEN cost_mode = 'assortment' THEN 'assortment' ELSE 'standard' END WHERE product_type IS NULL OR product_type = ''").Error; err != nil {
+		backfill := "UPDATE products SET product_type = 'standard' WHERE product_type IS NULL OR product_type = ''"
+		if tx.Migrator().HasColumn("products", "cost_mode") {
+			backfill = "UPDATE products SET product_type = CASE WHEN cost_mode = 'assortment' THEN 'assortment' ELSE 'standard' END WHERE product_type IS NULL OR product_type = ''"
+		}
+		if err := tx.Exec(backfill).Error; err != nil {
 			return err
 		}
 		return tx.Exec("UPDATE products SET composition_basis = 'legacy_recipes' WHERE product_type = 'assortment' AND composition_basis IS NULL").Error
