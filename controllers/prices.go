@@ -5,6 +5,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 	"log"
+	"math"
 	"mobile-backend-go/database"
 	"mobile-backend-go/models"
 	"net/http"
@@ -30,6 +31,11 @@ func AddPrice(c *gin.Context) {
 	var requestData models.PriceCreateDTO
 	if err := c.ShouldBindJSON(&requestData); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if math.IsNaN(requestData.Price) || math.IsInf(requestData.Price, 0) || requestData.Price < 0 || math.IsNaN(requestData.Quantity) || math.IsInf(requestData.Quantity, 0) || requestData.Quantity <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Price must be non-negative and quantity must be positive"})
 		return
 	}
 

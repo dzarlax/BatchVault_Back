@@ -59,6 +59,7 @@ func ConnectDatabase() {
 		&models.Product{},
 		&models.Package{},
 		&models.ProductOption{},
+		&models.ProductCostComponent{},
 		&models.Order{},
 		&models.OrderItem{},
 		&models.PushDevice{},
@@ -66,6 +67,10 @@ func ConnectDatabase() {
 
 	if err != nil {
 		log.Fatal("Model migration error: ", err)
+	}
+
+	if err := MigrateProductCosting(DB); err != nil {
+		log.Fatal("Product costing migration error: ", err)
 	}
 
 	// Create indexes for performance

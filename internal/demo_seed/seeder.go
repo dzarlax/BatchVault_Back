@@ -548,6 +548,11 @@ func deleteOperationalData(tx *gorm.DB, userID uint, workspaceID uint) error {
 		Pluck("id", &productIDs).Error; err != nil {
 		return err
 	}
+	if len(productIDs) > 0 && tx.Migrator().HasTable(&models.ProductCostComponent{}) {
+		if err := tx.Unscoped().Where("product_id IN ?", productIDs).Delete(&models.ProductCostComponent{}).Error; err != nil {
+			return err
+		}
+	}
 	var recipeIDs []uint
 	if err := tx.Unscoped().Model(&models.Recipe{}).
 		Where("user_id = ? AND workspace_id = ?", userID, workspaceID).

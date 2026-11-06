@@ -63,6 +63,7 @@ func setupWorkspaceBusinessTest(t *testing.T) workspaceBusinessFixture {
 		&models.Package{},
 		&models.Product{},
 		&models.ProductOption{},
+		&models.ProductCostComponent{},
 		&models.Client{},
 		&models.Order{},
 		&models.OrderItem{},

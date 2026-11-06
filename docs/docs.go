@@ -916,12 +916,12 @@ const docTemplate = `{
                 "summary": "Add a new order",
                 "parameters": [
                     {
-                        "description": "Order data",
+                        "description": "Order data; calculated cost_price is an assertion",
                         "name": "order",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "type": "object"
+                            "$ref": "#/definitions/controllers.costedOrderInput"
                         }
                     }
                 ],
@@ -943,6 +943,15 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Cost changed or calculation incomplete",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -1057,12 +1066,12 @@ const docTemplate = `{
                         "required": true
                     },
                     {
-                        "description": "Order data",
+                        "description": "Order data; preserve saved item IDs",
                         "name": "order",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/models.Order"
+                            "$ref": "#/definitions/controllers.costedOrderInput"
                         }
                     }
                 ],
@@ -1096,6 +1105,15 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Order not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Cost assertion or historical identity conflict",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -1381,6 +1399,60 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/packages/{id}": {
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Packages"
+                ],
+                "summary": "Update a package",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Package ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Package values and initialization confirmation",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/controllers.packagePatch"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.Package"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/prices": {
             "get": {
                 "security": [
@@ -1527,7 +1599,6 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Get all products available",
                 "produces": [
                     "application/json"
                 ],
@@ -1544,15 +1615,6 @@ const docTemplate = `{
                                 "$ref": "#/definitions/models.Product"
                             }
                         }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
                     }
                 }
             },
@@ -1562,7 +1624,6 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Create a new product by providing necessary details, including product options",
                 "consumes": [
                     "application/json"
                 ],
@@ -1572,15 +1633,15 @@ const docTemplate = `{
                 "tags": [
                     "Products"
                 ],
-                "summary": "Create a new product",
+                "summary": "Create a product",
                 "parameters": [
                     {
-                        "description": "Product data and options",
+                        "description": "Product configuration",
                         "name": "request",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/models.ProductRequest"
+                            "$ref": "#/definitions/controllers.productWriteDocumentation"
                         }
                     }
                 ],
@@ -1600,8 +1661,55 @@ const docTemplate = `{
                             }
                         }
                     },
-                    "401": {
-                        "description": "Unauthorized",
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/products/cost-preview": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Products"
+                ],
+                "summary": "Preview a product cost",
+                "parameters": [
+                    {
+                        "description": "Draft costing inputs",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.ProductCostPreviewInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.CostEstimate"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -1619,7 +1727,6 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Get a specific product by its ID",
                 "produces": [
                     "application/json"
                 ],
@@ -1642,6 +1749,49 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/models.Product"
                         }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Products"
+                ],
+                "summary": "Update a product",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Product ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Product configuration",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/controllers.productWriteDocumentation"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.Product"
+                        }
                     },
                     "400": {
                         "description": "Bad Request",
@@ -1652,17 +1802,8 @@ const docTemplate = `{
                             }
                         }
                     },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -1826,32 +1967,23 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Get all recipes available for the authenticated user with optional filtering by recipe_id and ingredient_id",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "Recipes"
                 ],
-                "summary": "Get list of recipes",
+                "summary": "Get recipes",
                 "parameters": [
                     {
                         "type": "integer",
-                        "description": "Workspace ID",
-                        "name": "X-Workspace-ID",
-                        "in": "header"
-                    },
-                    {
-                        "type": "integer",
-                        "example": 1,
-                        "description": "Filter by Recipe ID",
+                        "description": "Recipe ID",
                         "name": "recipe_id",
                         "in": "query"
                     },
                     {
                         "type": "integer",
-                        "example": 3,
-                        "description": "Filter by Ingredient ID",
+                        "description": "Ingredient ID",
                         "name": "ingredient_id",
                         "in": "query"
                     }
@@ -1865,33 +1997,6 @@ const docTemplate = `{
                                 "$ref": "#/definitions/models.Recipe"
                             }
                         }
-                    },
-                    "400": {
-                        "description": "Invalid parameters",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "500": {
-                        "description": "Failed to fetch recipes",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
                     }
                 }
             },
@@ -1901,7 +2006,6 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Create a new recipe for the authenticated user",
                 "consumes": [
                     "application/json"
                 ],
@@ -1911,7 +2015,7 @@ const docTemplate = `{
                 "tags": [
                     "Recipes"
                 ],
-                "summary": "Create a new recipe",
+                "summary": "Create a recipe",
                 "parameters": [
                     {
                         "description": "Recipe data",
@@ -1929,24 +2033,6 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/models.Recipe"
                         }
-                    },
-                    "400": {
-                        "description": "Bad request",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
                     }
                 }
             }
@@ -1958,7 +2044,6 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Get a recipe by its ID for the authenticated user",
                 "produces": [
                     "application/json"
                 ],
@@ -1967,12 +2052,6 @@ const docTemplate = `{
                 ],
                 "summary": "Get a recipe",
                 "parameters": [
-                    {
-                        "type": "integer",
-                        "description": "Workspace ID",
-                        "name": "X-Workspace-ID",
-                        "in": "header"
-                    },
                     {
                         "type": "integer",
                         "description": "Recipe ID",
@@ -1986,33 +2065,6 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/models.Recipe"
-                        }
-                    },
-                    "400": {
-                        "description": "Invalid recipe ID",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "404": {
-                        "description": "Recipe not found",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
                         }
                     }
                 }
@@ -2072,6 +2124,49 @@ const docTemplate = `{
                             "additionalProperties": {
                                 "type": "string"
                             }
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Recipes"
+                ],
+                "summary": "Update planned recipe yield",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Recipe ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Planned finished yield in grams; null clears it",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/controllers.recipeYieldPatch"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.Recipe"
                         }
                     }
                 }
@@ -2805,6 +2900,130 @@ const docTemplate = `{
                 }
             }
         },
+        "controllers.costedOrderInput": {
+            "type": "object",
+            "required": [
+                "client_id",
+                "items"
+            ],
+            "properties": {
+                "client_id": {
+                    "type": "integer"
+                },
+                "comment": {
+                    "type": "string"
+                },
+                "date": {
+                    "type": "string"
+                },
+                "items": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "$ref": "#/definitions/controllers.orderItemInput"
+                    }
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "controllers.orderItemInput": {
+            "type": "object",
+            "properties": {
+                "cost_price": {
+                    "type": "number"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "price": {
+                    "type": "number"
+                },
+                "product_id": {
+                    "type": "integer"
+                },
+                "quantity": {
+                    "type": "integer"
+                }
+            }
+        },
+        "controllers.packagePatch": {
+            "type": "object",
+            "properties": {
+                "confirm_weight_initialization": {
+                    "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "net_weight_g": {
+                    "type": "number"
+                },
+                "unit_cost": {
+                    "type": "number"
+                }
+            }
+        },
+        "controllers.productWriteDocumentation": {
+            "type": "object",
+            "required": [
+                "name",
+                "package_id",
+                "price"
+            ],
+            "properties": {
+                "components": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.ProductCostComponentInput"
+                    }
+                },
+                "cost": {
+                    "type": "number"
+                },
+                "cost_mode": {
+                    "type": "string",
+                    "enum": [
+                        "manual",
+                        "recipe",
+                        "assortment"
+                    ]
+                },
+                "cost_recipe_id": {
+                    "type": "integer"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "image": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "package_id": {
+                    "type": "integer"
+                },
+                "price": {
+                    "type": "number"
+                },
+                "recipe_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        "controllers.recipeYieldPatch": {
+            "type": "object",
+            "properties": {
+                "planned_yield_g": {
+                    "type": "number"
+                }
+            }
+        },
         "currencycatalog.Currency": {
             "type": "object",
             "properties": {
@@ -3044,6 +3263,139 @@ const docTemplate = `{
                 }
             }
         },
+        "models.CostComponentEstimate": {
+            "type": "object",
+            "properties": {
+                "content_cost": {
+                    "type": "number"
+                },
+                "cost_per_gram": {
+                    "type": "number"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "planned_yield_g": {
+                    "type": "number"
+                },
+                "quantity_g": {
+                    "type": "number"
+                },
+                "recipe_cost": {
+                    "type": "number"
+                },
+                "recipe_id": {
+                    "type": "integer"
+                }
+            }
+        },
+        "models.CostEstimate": {
+            "type": "object",
+            "properties": {
+                "calculated_at": {
+                    "type": "string"
+                },
+                "components": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.CostComponentEstimate"
+                    }
+                },
+                "content_cost": {
+                    "type": "number"
+                },
+                "cost_per_gram": {
+                    "type": "number"
+                },
+                "issues": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.CostIssue"
+                    }
+                },
+                "known_ingredient_cost": {
+                    "type": "number"
+                },
+                "net_weight_g": {
+                    "type": "number"
+                },
+                "package_id": {
+                    "type": "integer"
+                },
+                "packaging_cost": {
+                    "type": "number"
+                },
+                "planned_yield_g": {
+                    "type": "number"
+                },
+                "prices": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.CostPriceReference"
+                    }
+                },
+                "source": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "total_cost": {
+                    "type": "number"
+                }
+            }
+        },
+        "models.CostIssue": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string"
+                },
+                "ingredient_id": {
+                    "type": "integer"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "recipe_id": {
+                    "type": "integer"
+                }
+            }
+        },
+        "models.CostPriceReference": {
+            "type": "object",
+            "properties": {
+                "date": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "ingredient_id": {
+                    "type": "integer"
+                }
+            }
+        },
+        "models.CostSnapshot": {
+            "type": "object",
+            "properties": {
+                "amount": {
+                    "type": "number"
+                },
+                "calculated_at": {
+                    "type": "string"
+                },
+                "estimate": {
+                    "$ref": "#/definitions/models.CostEstimate"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "integer"
+                }
+            }
+        },
         "models.Ingredient": {
             "type": "object",
             "required": [
@@ -3147,6 +3499,9 @@ const docTemplate = `{
                 "cost_price": {
                     "type": "number"
                 },
+                "cost_snapshot": {
+                    "$ref": "#/definitions/models.CostSnapshot"
+                },
                 "created_at": {
                     "type": "string"
                 },
@@ -3192,12 +3547,18 @@ const docTemplate = `{
                     "type": "string",
                     "minLength": 1
                 },
+                "net_weight_g": {
+                    "type": "number"
+                },
                 "products": {
                     "description": "If Package is related to Product through PackageID",
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/models.Product"
                     }
+                },
+                "unit_cost": {
+                    "type": "number"
                 },
                 "updated_at": {
                     "type": "string"
@@ -3225,6 +3586,12 @@ const docTemplate = `{
                 "name": {
                     "type": "string",
                     "minLength": 1
+                },
+                "net_weight_g": {
+                    "type": "number"
+                },
+                "unit_cost": {
+                    "type": "number"
                 }
             }
         },
@@ -3282,7 +3649,6 @@ const docTemplate = `{
             "type": "object",
             "required": [
                 "ingredient_id",
-                "price",
                 "quantity"
             ],
             "properties": {
@@ -3311,9 +3677,24 @@ const docTemplate = `{
                 "price"
             ],
             "properties": {
+                "components": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.ProductCostComponent"
+                    }
+                },
                 "cost": {
                     "type": "number",
                     "minimum": 0
+                },
+                "cost_estimate": {
+                    "$ref": "#/definitions/models.CostEstimate"
+                },
+                "cost_mode": {
+                    "type": "string"
+                },
+                "cost_recipe_id": {
+                    "type": "integer"
                 },
                 "created_at": {
                     "type": "string"
@@ -3370,6 +3751,69 @@ const docTemplate = `{
                 }
             }
         },
+        "models.ProductCostComponent": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "position": {
+                    "type": "integer"
+                },
+                "product_id": {
+                    "type": "integer"
+                },
+                "quantity_g": {
+                    "type": "number"
+                },
+                "recipe_id": {
+                    "type": "integer"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "workspace_id": {
+                    "type": "integer"
+                }
+            }
+        },
+        "models.ProductCostComponentInput": {
+            "type": "object",
+            "properties": {
+                "quantity_g": {
+                    "type": "number"
+                },
+                "recipe_id": {
+                    "type": "integer"
+                }
+            }
+        },
+        "models.ProductCostPreviewInput": {
+            "type": "object",
+            "properties": {
+                "components": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.ProductCostComponentInput"
+                    }
+                },
+                "cost": {
+                    "type": "number"
+                },
+                "cost_mode": {
+                    "type": "string"
+                },
+                "cost_recipe_id": {
+                    "type": "integer"
+                },
+                "package_id": {
+                    "type": "integer"
+                }
+            }
+        },
         "models.ProductOption": {
             "type": "object",
             "properties": {
@@ -3402,20 +3846,6 @@ const docTemplate = `{
                 }
             }
         },
-        "models.ProductRequest": {
-            "type": "object",
-            "properties": {
-                "options": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/models.ProductOption"
-                    }
-                },
-                "product": {
-                    "$ref": "#/definitions/models.Product"
-                }
-            }
-        },
         "models.Recipe": {
             "type": "object",
             "required": [
@@ -3428,6 +3858,9 @@ const docTemplate = `{
                         "$ref": "#/definitions/models.CookingSession"
                     }
                 },
+                "cost_estimate": {
+                    "$ref": "#/definitions/models.CostEstimate"
+                },
                 "created_at": {
                     "type": "string"
                 },
@@ -3437,6 +3870,9 @@ const docTemplate = `{
                 "name": {
                     "type": "string",
                     "minLength": 1
+                },
+                "planned_yield_g": {
+                    "type": "number"
                 },
                 "product_options": {
                     "type": "array",
@@ -3480,6 +3916,9 @@ const docTemplate = `{
                 "name": {
                     "type": "string",
                     "minLength": 1
+                },
+                "planned_yield_g": {
+                    "type": "number"
                 }
             }
         },
@@ -3489,6 +3928,9 @@ const docTemplate = `{
                 "calculated_cost": {
                     "description": "Field not persisted to database",
                     "type": "number"
+                },
+                "cost_status": {
+                    "type": "string"
                 },
                 "created_at": {
                     "type": "string"
