@@ -39,13 +39,43 @@ func TestProductCostingPostgresMigrationAndCalculation(t *testing.T) {
 	t.Cleanup(func() { admin.Exec("DROP SCHEMA " + schema + " CASCADE"); sqlDB, _ := admin.DB(); sqlDB.Close() })
 	query := parsed.Query()
 	query.Set("search_path", schema)
+	query.Set("default_query_exec_mode", "simple_protocol")
 	parsed.RawQuery = query.Encode()
 	db, err := gorm.Open(postgres.Open(parsed.String()), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { sqlDB, _ := db.DB(); sqlDB.Close() })
-	if err := db.AutoMigrate(&models.User{}, &models.Workspace{}, &models.Ingredient{}, &models.Price{}, &models.Recipe{}, &models.RecipeIngredient{}, &models.Package{}, &models.Product{}, &models.ProductCostComponent{}, &models.Client{}, &models.Order{}, &models.OrderItem{}); err != nil {
+	// Exercise preparation against a pre-product-type schema before GORM defaults.
+	if err := db.Exec("CREATE TABLE products (id integer primary key, cost_mode text)").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec("INSERT INTO products VALUES (1, 'manual'), (2, 'assortment')").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.PrepareProductTypes(db); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec("UPDATE products SET cost_mode = 'manual' WHERE id = 2").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.PrepareProductTypes(db); err != nil {
+		t.Fatal(err)
+	}
+	var legacy struct {
+		ProductType      string
+		CompositionBasis *string
+	}
+	if err := db.Table("products").Where("id = 2").Take(&legacy).Error; err != nil {
+		t.Fatal(err)
+	}
+	if legacy.ProductType != "assortment" || legacy.CompositionBasis == nil || *legacy.CompositionBasis != "legacy_recipes" {
+		t.Fatalf("legacy backfill: %+v", legacy)
+	}
+	if err := db.Exec("DROP TABLE products").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&models.User{}, &models.Workspace{}, &models.Ingredient{}, &models.Price{}, &models.Recipe{}, &models.RecipeIngredient{}, &models.Package{}, &models.Product{}, &models.ProductCostComponent{}, &models.ProductAssortmentComponent{}, &models.Client{}, &models.Order{}, &models.OrderItem{}); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 2; i++ {
@@ -128,6 +158,80 @@ func TestProductCostingPostgresMigrationAndCalculation(t *testing.T) {
 	}
 	if restored.CostSnapshot == nil || restored.CostSnapshot.Version != 1 || restored.CostSnapshot.Amount != 0.57 {
 		t.Fatal("jsonb snapshot did not round-trip")
+	}
+	// Reconstruct the preceding schema by removing only the new columns and table
+	// from the real model schema, while retaining representative old data.
+	recipeB := models.Recipe{Name: "Second", UserID: user.ID, WorkspaceID: &ws.ID, PlannedYieldG: d("2")}
+	must(&recipeB)
+	legacyProduct := models.Product{Name: "Legacy assortment", Price: 12, Cost: 19.25, CostMode: "assortment", ProductType: "assortment", PackageID: pkg.ID, WorkspaceID: &ws.ID, UserID: user.ID}
+	must(&legacyProduct)
+	must(&models.ProductCostComponent{WorkspaceID: ws.ID, ProductID: legacyProduct.ID, RecipeID: recipe.ID, QuantityG: "0.500", Position: 0})
+	must(&models.ProductCostComponent{WorkspaceID: ws.ID, ProductID: legacyProduct.ID, RecipeID: recipeB.ID, QuantityG: "0.500", Position: 1})
+	var snapshotBefore string
+	if err := db.Raw("SELECT cost_snapshot::text FROM order_items WHERE id = ?", item.ID).Scan(&snapshotBefore).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec("DROP TABLE product_assortment_components").Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, column := range []string{"product_type", "composition_basis", "configuration_version"} {
+		if err := db.Exec("ALTER TABLE products DROP COLUMN " + column).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	migrate := func() {
+		t.Helper()
+		if err := database.PrepareProductTypes(db); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.AutoMigrate(&models.User{}, &models.Workspace{}, &models.Ingredient{}, &models.Price{}, &models.Recipe{}, &models.RecipeIngredient{}, &models.Package{}, &models.Product{}, &models.ProductCostComponent{}, &models.ProductAssortmentComponent{}, &models.Client{}, &models.Order{}, &models.OrderItem{}); err != nil {
+			t.Fatal(err)
+		}
+		if err := database.MigrateProductCosting(db); err != nil {
+			t.Fatal(err)
+		}
+	}
+	migrate()
+	var migrated models.Product
+	if err := db.Preload("CostComponents").First(&migrated, legacyProduct.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if migrated.ProductType != "assortment" || migrated.CompositionBasis == nil || *migrated.CompositionBasis != "legacy_recipes" || migrated.Cost != 19.25 || len(migrated.CostComponents) != 2 {
+		t.Fatalf("legacy assortment changed: %+v", migrated)
+	}
+	var manualAfter models.Product
+	if err := db.First(&manualAfter, manual.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if manualAfter.Cost != 5.123 || manualAfter.ProductType != "standard" {
+		t.Fatalf("manual changed: %+v", manualAfter)
+	}
+	basis := "products"
+	modern := models.Product{Name: "Manual assortment", Price: 10, Cost: 290, CostMode: "manual", ProductType: "assortment", CompositionBasis: &basis, PackageID: pkg.ID, WorkspaceID: &ws.ID, UserID: user.ID}
+	must(&modern)
+	must(&models.ProductAssortmentComponent{WorkspaceID: ws.ID, ProductID: modern.ID, ComponentProductID: manual.ID, QuantityG: "0.500"})
+	must(&models.ProductAssortmentComponent{WorkspaceID: ws.ID, ProductID: modern.ID, ComponentProductID: product.ID, QuantityG: "0.500"})
+	migrate()
+	migrated = models.Product{}
+	if err := db.Preload("AssortmentComponents").First(&migrated, modern.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if migrated.ProductType != "assortment" || migrated.CostMode != "manual" || migrated.Cost != 290 || migrated.CompositionBasis == nil || *migrated.CompositionBasis != "products" || len(migrated.AssortmentComponents) != 2 {
+		t.Fatalf("modern manual changed: %+v", migrated)
+	}
+	var snapshotAfter string
+	if err := db.Raw("SELECT cost_snapshot::text FROM order_items WHERE id = ?", item.ID).Scan(&snapshotAfter).Error; err != nil {
+		t.Fatal(err)
+	}
+	if snapshotBefore != snapshotAfter {
+		t.Fatal("historical snapshot changed during migration")
+	}
+	var sourceFK int64
+	if err := db.Raw(`SELECT count(*) FROM pg_constraint c JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=ANY(c.conkey) WHERE c.contype='f' AND c.conrelid='product_assortment_components'::regclass AND c.confrelid='products'::regclass AND a.attname='component_product_id'`).Scan(&sourceFK).Error; err != nil {
+		t.Fatal(err)
+	}
+	if sourceFK != 1 {
+		t.Fatalf("expected source product foreign key, got %d", sourceFK)
 	}
 	if err := db.Model(&models.Package{}).Where("id = ?", pkg.ID).Update("unit_cost", "-1").Error; err == nil {
 		t.Fatal("negative package cost accepted")

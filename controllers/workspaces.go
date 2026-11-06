@@ -9,18 +9,32 @@ import (
 	"mobile-backend-go/database"
 	"mobile-backend-go/models"
 	"net/http"
+	"os"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
 
 // WorkspaceResponse represents a workspace available to the authenticated user.
+type WorkspaceCapabilities struct {
+	ProductTypesV1 bool `json:"product_types_v1"`
+}
+
+func productTypesEnabled() bool {
+	return !strings.EqualFold(strings.TrimSpace(os.Getenv("PRODUCT_TYPES_V1_ENABLED")), "false")
+}
+func workspaceCapabilities() WorkspaceCapabilities {
+	return WorkspaceCapabilities{ProductTypesV1: productTypesEnabled()}
+}
+
 type WorkspaceResponse struct {
-	ID        uint   `json:"id"`
-	Name      string `json:"name"`
-	Slug      string `json:"slug"`
-	Currency  string `json:"currency"`
-	AccountID *uint  `json:"account_id,omitempty"`
-	Role      string `json:"role"`
+	Capabilities WorkspaceCapabilities `json:"capabilities"`
+	ID           uint                  `json:"id"`
+	Name         string                `json:"name"`
+	Slug         string                `json:"slug"`
+	Currency     string                `json:"currency"`
+	AccountID    *uint                 `json:"account_id,omitempty"`
+	Role         string                `json:"role"`
 }
 
 // GetCurrencies returns the supported ISO 4217 monetary currencies.
@@ -103,12 +117,13 @@ func GetCurrentWorkspace(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, WorkspaceResponse{
-		ID:        workspace.ID,
-		Name:      workspace.Name,
-		Slug:      workspace.Slug,
-		Currency:  workspace.Currency,
-		AccountID: workspace.AccountID,
-		Role:      role,
+		ID:           workspace.ID,
+		Name:         workspace.Name,
+		Slug:         workspace.Slug,
+		Currency:     workspace.Currency,
+		AccountID:    workspace.AccountID,
+		Capabilities: workspaceCapabilities(),
+		Role:         role,
 	})
 }
 
@@ -196,11 +211,12 @@ func decodeCurrencyUpdate(c *gin.Context) (string, error) {
 
 func workspaceResponseFromMembership(membership models.WorkspaceMember) WorkspaceResponse {
 	return WorkspaceResponse{
-		ID:        membership.Workspace.ID,
-		Name:      membership.Workspace.Name,
-		Slug:      membership.Workspace.Slug,
-		Currency:  membership.Workspace.Currency,
-		AccountID: membership.Workspace.AccountID,
-		Role:      membership.Role,
+		ID:           membership.Workspace.ID,
+		Name:         membership.Workspace.Name,
+		Slug:         membership.Workspace.Slug,
+		Currency:     membership.Workspace.Currency,
+		AccountID:    membership.Workspace.AccountID,
+		Capabilities: workspaceCapabilities(),
+		Role:         membership.Role,
 	}
 }

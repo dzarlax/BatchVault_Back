@@ -161,3 +161,31 @@ func TestCalculatedSameRoundedAmountStoresFreshBreakdown(t *testing.T) {
 		t.Fatalf("same-total assertion did not capture fresh inputs: %+v", e)
 	}
 }
+
+func TestManualCostEditPreservesCapturedProvenance(t *testing.T) {
+	f := setupCostingBusiness(t)
+	order := createCostedOrderForTest(t, f, 42)
+	row := order.Items[0]
+	if row.CostSnapshot == nil || row.CostSnapshot.Provenance == nil {
+		t.Fatalf("missing provenance: %+v", row.CostSnapshot)
+	}
+	name := row.CostSnapshot.Provenance.ProductName
+	if err := database.DB.Model(&models.Product{}).Where("id = ?", row.ProductID).Update("name", "Changed").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.DB.Delete(&models.Product{}, row.ProductID).Error; err != nil {
+		t.Fatal(err)
+	}
+	body := map[string]any{"client_id": f.PersonalClient.ID, "status": "ready", "items": []any{map[string]any{"id": row.ID, "product_id": row.ProductID, "quantity": 2, "price": 650, "cost_price": 77}}}
+	r := runWorkspaceJSONRequest(f.User.ID, f.PersonalWorkspace.ID, UpdateOrder, "PUT", "/orders/:id", fmt.Sprintf("/orders/%d", order.ID), body)
+	if r.Code != 200 {
+		t.Fatalf("update: %d %s", r.Code, r.Body)
+	}
+	var saved models.OrderItem
+	if err := database.DB.First(&saved, row.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if saved.CostSnapshot == nil || saved.CostSnapshot.Amount != 77 || saved.CostSnapshot.Provenance == nil || saved.CostSnapshot.Provenance.ProductName != name {
+		t.Fatalf("provenance changed: %+v", saved.CostSnapshot)
+	}
+}

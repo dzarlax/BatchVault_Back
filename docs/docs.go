@@ -2877,11 +2877,22 @@ const docTemplate = `{
                 }
             }
         },
+        "controllers.WorkspaceCapabilities": {
+            "type": "object",
+            "properties": {
+                "product_types_v1": {
+                    "type": "boolean"
+                }
+            }
+        },
         "controllers.WorkspaceResponse": {
             "type": "object",
             "properties": {
                 "account_id": {
                     "type": "integer"
+                },
+                "capabilities": {
+                    "$ref": "#/definitions/controllers.WorkspaceCapabilities"
                 },
                 "currency": {
                     "type": "string"
@@ -2973,11 +2984,27 @@ const docTemplate = `{
                 "price"
             ],
             "properties": {
+                "assortment_components": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.ProductAssortmentComponent"
+                    }
+                },
                 "components": {
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/models.ProductCostComponentInput"
                     }
+                },
+                "composition_basis": {
+                    "type": "string",
+                    "enum": [
+                        "products",
+                        "legacy_recipes"
+                    ]
+                },
+                "configuration_version": {
+                    "type": "integer"
                 },
                 "cost": {
                     "type": "number"
@@ -3007,6 +3034,16 @@ const docTemplate = `{
                 },
                 "price": {
                     "type": "number"
+                },
+                "product_type": {
+                    "type": "string",
+                    "enum": [
+                        "standard",
+                        "assortment"
+                    ]
+                },
+                "recipe_id": {
+                    "type": "integer"
                 },
                 "recipe_ids": {
                     "type": "array",
@@ -3158,6 +3195,44 @@ const docTemplate = `{
                 }
             }
         },
+        "models.CompositionDetail": {
+            "type": "object",
+            "properties": {
+                "component_product_id": {
+                    "type": "integer"
+                },
+                "content_cost": {
+                    "type": "number"
+                },
+                "cost_per_gram": {
+                    "type": "number"
+                },
+                "issues": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.CostIssue"
+                    }
+                },
+                "position": {
+                    "type": "integer"
+                },
+                "product_name": {
+                    "type": "string"
+                },
+                "quantity_g": {
+                    "type": "number"
+                },
+                "recipe_id": {
+                    "type": "integer"
+                },
+                "recipe_name": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
         "models.CookingSession": {
             "type": "object",
             "required": [
@@ -3266,6 +3341,9 @@ const docTemplate = `{
         "models.CostComponentEstimate": {
             "type": "object",
             "properties": {
+                "component_product_id": {
+                    "type": "integer"
+                },
                 "content_cost": {
                     "type": "number"
                 },
@@ -3299,6 +3377,12 @@ const docTemplate = `{
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/models.CostComponentEstimate"
+                    }
+                },
+                "composition_details": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.CompositionDetail"
                     }
                 },
                 "content_cost": {
@@ -3351,6 +3435,9 @@ const docTemplate = `{
                 "code": {
                     "type": "string"
                 },
+                "component_product_id": {
+                    "type": "integer"
+                },
                 "ingredient_id": {
                     "type": "integer"
                 },
@@ -3376,6 +3463,46 @@ const docTemplate = `{
                 }
             }
         },
+        "models.CostProvenance": {
+            "type": "object",
+            "properties": {
+                "components": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.CompositionDetail"
+                    }
+                },
+                "composition_basis": {
+                    "type": "string"
+                },
+                "package": {
+                    "$ref": "#/definitions/models.CostProvenancePackage"
+                },
+                "product_name": {
+                    "type": "string"
+                },
+                "product_type": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.CostProvenancePackage": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "net_weight_g": {
+                    "type": "number"
+                },
+                "unit_cost": {
+                    "type": "number"
+                }
+            }
+        },
         "models.CostSnapshot": {
             "type": "object",
             "properties": {
@@ -3387,6 +3514,9 @@ const docTemplate = `{
                 },
                 "estimate": {
                     "$ref": "#/definitions/models.CostEstimate"
+                },
+                "provenance": {
+                    "$ref": "#/definitions/models.CostProvenance"
                 },
                 "source": {
                     "type": "string"
@@ -3677,11 +3807,23 @@ const docTemplate = `{
                 "price"
             ],
             "properties": {
+                "assortment_components": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.ProductAssortmentComponent"
+                    }
+                },
                 "components": {
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/models.ProductCostComponent"
                     }
+                },
+                "composition_basis": {
+                    "type": "string"
+                },
+                "configuration_version": {
+                    "type": "integer"
                 },
                 "cost": {
                     "type": "number",
@@ -3734,6 +3876,12 @@ const docTemplate = `{
                     "type": "number",
                     "minimum": 0
                 },
+                "product_type": {
+                    "type": "string"
+                },
+                "recipe_id": {
+                    "type": "integer"
+                },
                 "updated_at": {
                     "type": "string"
                 },
@@ -3748,6 +3896,20 @@ const docTemplate = `{
                 },
                 "workspace_id": {
                     "type": "integer"
+                }
+            }
+        },
+        "models.ProductAssortmentComponent": {
+            "type": "object",
+            "properties": {
+                "component_product_id": {
+                    "type": "integer"
+                },
+                "position": {
+                    "type": "integer"
+                },
+                "quantity_g": {
+                    "type": "number"
                 }
             }
         },
@@ -3794,11 +3956,20 @@ const docTemplate = `{
         "models.ProductCostPreviewInput": {
             "type": "object",
             "properties": {
+                "assortment_components": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.ProductAssortmentComponent"
+                    }
+                },
                 "components": {
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/models.ProductCostComponentInput"
                     }
+                },
+                "composition_basis": {
+                    "type": "string"
                 },
                 "cost": {
                     "type": "number"
@@ -3810,6 +3981,12 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "package_id": {
+                    "type": "integer"
+                },
+                "product_type": {
+                    "type": "string"
+                },
+                "recipe_id": {
                     "type": "integer"
                 }
             }

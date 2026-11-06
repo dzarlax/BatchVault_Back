@@ -43,3 +43,27 @@ The additive migration preserves manual costs and can run repeatedly. The active
 Run `go test ./...` and `go vet ./...`. Optional PostgreSQL migration/decimal and package concurrency tests accept only a disposable localhost database named `costing_test`, selected by `COSTING_TEST_DATABASE_URL`; each uses its own schema. Client repositories contain quote-refresh, history-restoration and scoped-recovery tests. The web scenarios cover both order surfaces through stale 409, explicit refresh and successful save.
 
 Calculated modes require compatible backend and client versions. Existing manual products are not automatically converted. Real recipe yields, package values and assortment assignments must be entered explicitly; neither labels nor account data are used to infer them.
+
+### Product types feature gate
+
+`PRODUCT_TYPES_V1_ENABLED=false` disables requests that send the new
+`product_type` configuration while preserving reads of existing products.
+Workspace responses expose the setting as `capabilities.product_types_v1`.
+The feature is enabled when the variable is unset.
+
+Product types separate the physical composition from the cost method. A
+`standard` product can retain its primary `recipe_id` when using manual cost;
+`cost_recipe_id` is an alias for the same value. A product-basis `assortment`
+uses at least two distinct ordinary products with positive gram quantities.
+The source product's primary recipe supplies its content rate, irrespective of
+its own cost method or package. The assortment's package is added once for
+automatic costing. Manual cost is the complete amount and may be zero.
+
+Existing recipe-based assortments retain `composition_basis: legacy_recipes`.
+Conversion to product composition requires explicit product selections.
+Known package weight must equal the component total. Unknown package weight is
+allowed in configuration but leaves automatic costing incomplete. New clients
+send `configuration_version` on updates and must refresh after a 409 conflict.
+After a committed write, `refresh_required: true` means the write succeeded but
+the fresh read failed; retry the read rather than the write. Order snapshots
+retain captured composition and package provenance across later catalog edits.

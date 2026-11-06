@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"mobile-backend-go/controllers"
 	"mobile-backend-go/database"
 	"mobile-backend-go/models"
+	"mobile-backend-go/services"
 )
 
 // Exercise the actual package/product handlers against independent PostgreSQL connections.
@@ -181,8 +183,343 @@ func packageRaceDatabase(t *testing.T) (*gorm.DB, *gorm.DB, string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { sqlDB, _ := db.DB(); _ = sqlDB.Close() })
-	if err := db.AutoMigrate(&models.User{}, &models.Workspace{}, &models.Ingredient{}, &models.Recipe{}, &models.RecipeIngredient{}, &models.Price{}, &models.Package{}, &models.Product{}, &models.ProductOption{}, &models.ProductCostComponent{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Workspace{}, &models.Ingredient{}, &models.Recipe{}, &models.RecipeIngredient{}, &models.Price{}, &models.Package{}, &models.Product{}, &models.ProductOption{}, &models.ProductCostComponent{}, &models.ProductAssortmentComponent{}); err != nil {
 		t.Fatal(err)
 	}
 	return db, admin, schema
+}
+
+func TestProductDeleteWaitsForNewAssortmentReference(t *testing.T) {
+	db, admin, schema := packageRaceDatabase(t)
+	previous := database.DB
+	database.DB = db
+	t.Cleanup(func() { database.DB = previous })
+	user := models.User{Username: "graph-race", Password: "unused"}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatal(err)
+	}
+	ws := models.Workspace{Name: "Graph", Slug: "graph"}
+	if err := db.Create(&ws).Error; err != nil {
+		t.Fatal(err)
+	}
+	pkg := models.Package{Name: "Pack", UserID: user.ID, WorkspaceID: &ws.ID, NetWeightG: decimal("100"), UnitCost: decimal("0")}
+	if err := db.Create(&pkg).Error; err != nil {
+		t.Fatal(err)
+	}
+	a := models.Product{Name: "A", Price: 10, ProductType: "standard", PackageID: pkg.ID, WorkspaceID: &ws.ID, UserID: user.ID}
+	b := models.Product{Name: "B", Price: 10, ProductType: "standard", PackageID: pkg.ID, WorkspaceID: &ws.ID, UserID: user.ID}
+	if err := db.Create(&a).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&b).Error; err != nil {
+		t.Fatal(err)
+	}
+	inserted, release := make(chan struct{}), make(chan struct{})
+	var once, releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(unblock)
+	if err := db.Callback().Create().After("gorm:create").Register("test:pause_graph_reference", func(tx *gorm.DB) {
+		if tx.Statement.Table == "product_assortment_components" {
+			once.Do(func() { close(inserted); <-release })
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	router := gin.New()
+	router.Use(func(c *gin.Context) { c.Set("userID", user.ID); c.Set("workspaceID", ws.ID) })
+	router.POST("/products", controllers.CreateProduct)
+	router.DELETE("/products/:id", controllers.DeleteProduct)
+	request := func(method, path string, v any) *httptest.ResponseRecorder {
+		data, _ := json.Marshal(v)
+		req := httptest.NewRequest(method, path, bytes.NewReader(data))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		return w
+	}
+	created, deleted := make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		created <- request("POST", "/products", map[string]any{"name": "Mix", "price": 10, "package_id": pkg.ID, "product_type": "assortment", "composition_basis": "products", "cost_mode": "manual", "cost": 0, "assortment_components": []any{map[string]any{"component_product_id": a.ID, "quantity_g": 50}, map[string]any{"component_product_id": b.ID, "quantity_g": 50}}})
+	}()
+	select {
+	case <-inserted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("create did not reach barrier")
+	}
+	go func() { deleted <- request("DELETE", fmt.Sprintf("/products/%d", a.ID), nil) }()
+	blocked := false
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var count int64
+		if err := admin.Raw("SELECT count(*) FROM pg_stat_activity WHERE application_name = ? AND wait_event_type = 'Lock'", schema).Scan(&count).Error; err != nil {
+			t.Fatal(err)
+		}
+		if count > 0 {
+			blocked = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	unblock()
+	cr, dr := <-created, <-deleted
+	if !blocked || cr.Code != 201 || dr.Code != 409 {
+		t.Fatalf("blocked=%v create=%d %s delete=%d %s", blocked, cr.Code, cr.Body, dr.Code, dr.Body)
+	}
+}
+
+func TestCostingRepeatableReadKeepsYieldAndPriceSnapshot(t *testing.T) {
+	db, _, _ := packageRaceDatabase(t)
+	u := models.User{Username: "rr-costing", Password: "unused"}
+	if err := db.Create(&u).Error; err != nil {
+		t.Fatal(err)
+	}
+	ws := models.Workspace{Name: "RR", Slug: "rr"}
+	if err := db.Create(&ws).Error; err != nil {
+		t.Fatal(err)
+	}
+	ingredient := models.Ingredient{Name: "content", Type: "meat"}
+	if err := db.Create(&ingredient).Error; err != nil {
+		t.Fatal(err)
+	}
+	recipe := models.Recipe{Name: "recipe", UserID: u.ID, WorkspaceID: &ws.ID, PlannedYieldG: decimal("100")}
+	if err := db.Create(&recipe).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&models.RecipeIngredient{RecipeID: recipe.ID, IngredientID: ingredient.ID, Quantity: "1", Unit: "kg"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	price := models.Price{IngredientID: ingredient.ID, UserID: u.ID, Price: 100, Quantity: 1, Unit: "kg", WorkspaceID: &ws.ID, Date: time.Now()}
+	if err := db.Create(&price).Error; err != nil {
+		t.Fatal(err)
+	}
+	pkg := models.Package{Name: "pack", UserID: u.ID, WorkspaceID: &ws.ID, NetWeightG: decimal("100"), UnitCost: decimal("0")}
+	if err := db.Create(&pkg).Error; err != nil {
+		t.Fatal(err)
+	}
+	product := models.Product{Name: "product", Price: 10, CostMode: "recipe", CostRecipeID: &recipe.ID, PackageID: pkg.ID, WorkspaceID: &ws.ID, UserID: u.ID}
+	if err := db.Create(&product).Error; err != nil {
+		t.Fatal(err)
+	}
+	anchored, changed := make(chan struct{}), make(chan error, 1)
+	result := make(chan error, 1)
+	go func() {
+		result <- database.CostingTransaction(db, true, func(tx *gorm.DB) error {
+			var p models.Product
+			if err := tx.First(&p, product.ID).Error; err != nil {
+				return err
+			}
+			close(anchored)
+			if err := <-changed; err != nil {
+				return err
+			}
+			rows := []models.Product{p}
+			if err := services.NewCosting(tx, ws.ID).AttachProducts(rows); err != nil {
+				return err
+			}
+			if rows[0].CostEstimate.TotalCost == nil || *rows[0].CostEstimate.TotalCost != 100 {
+				return fmt.Errorf("snapshot estimate: %+v", rows[0].CostEstimate)
+			}
+			return nil
+		})
+	}()
+	<-anchored
+	err := db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&recipe).Update("planned_yield_g", "200").Error; err != nil {
+			return err
+		}
+		return tx.Model(&price).Update("price", 400).Error
+	})
+	changed <- err
+	if err := <-result; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProductVersionCASConcurrentUpdates(t *testing.T) {
+	db, _, _ := packageRaceDatabase(t)
+	previous := database.DB
+	database.DB = db
+	t.Cleanup(func() { database.DB = previous })
+	u := models.User{Username: "cas", Password: "unused"}
+	if err := db.Create(&u).Error; err != nil {
+		t.Fatal(err)
+	}
+	ws := models.Workspace{Name: "CAS", Slug: "cas"}
+	if err := db.Create(&ws).Error; err != nil {
+		t.Fatal(err)
+	}
+	pkg := models.Package{Name: "pack", UserID: u.ID, WorkspaceID: &ws.ID}
+	if err := db.Create(&pkg).Error; err != nil {
+		t.Fatal(err)
+	}
+	p := models.Product{Name: "source", Price: 10, ProductType: "standard", CostMode: "manual", PackageID: pkg.ID, WorkspaceID: &ws.ID, UserID: u.ID}
+	if err := db.Create(&p).Error; err != nil {
+		t.Fatal(err)
+	}
+	router := gin.New()
+	router.Use(func(c *gin.Context) { c.Set("userID", u.ID); c.Set("workspaceID", ws.ID) })
+	router.PUT("/products/:id", controllers.UpdateProduct)
+	results := make(chan int, 2)
+	start := make(chan struct{})
+	for _, name := range []string{"first", "second"} {
+		go func(name string) {
+			<-start
+			data, _ := json.Marshal(map[string]any{"name": name, "price": 10, "package_id": pkg.ID, "product_type": "standard", "cost_mode": "manual", "cost": 0, "configuration_version": p.ConfigurationVersion})
+			req := httptest.NewRequest("PUT", fmt.Sprintf("/products/%d", p.ID), bytes.NewReader(data))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			results <- w.Code
+		}(name)
+	}
+	close(start)
+	a, b := <-results, <-results
+	if !((a == 200 && b == 409) || (a == 409 && b == 200)) {
+		t.Fatalf("results %d, %d", a, b)
+	}
+}
+
+func TestProductWriteResponseUsesFreshCostingSnapshot(t *testing.T) {
+	for _, method := range []string{"POST", "PUT"} {
+		t.Run(method, func(t *testing.T) {
+			db, _, _ := packageRaceDatabase(t)
+			previous := database.DB
+			database.DB = db
+			t.Cleanup(func() { database.DB = previous })
+			u := models.User{Username: "response", Password: "unused"}
+			if err := db.Create(&u).Error; err != nil {
+				t.Fatal(err)
+			}
+			ws := models.Workspace{Name: "Response", Slug: "response"}
+			if err := db.Create(&ws).Error; err != nil {
+				t.Fatal(err)
+			}
+			ingredient := models.Ingredient{Name: "content", Type: "meat"}
+			if err := db.Create(&ingredient).Error; err != nil {
+				t.Fatal(err)
+			}
+			recipe := models.Recipe{Name: "recipe", UserID: u.ID, WorkspaceID: &ws.ID, PlannedYieldG: decimal("100")}
+			if err := db.Create(&recipe).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Create(&models.RecipeIngredient{RecipeID: recipe.ID, IngredientID: ingredient.ID, Quantity: "1", Unit: "kg"}).Error; err != nil {
+				t.Fatal(err)
+			}
+			price := models.Price{IngredientID: ingredient.ID, UserID: u.ID, Price: 100, Quantity: 1, Unit: "kg", WorkspaceID: &ws.ID, Date: time.Now()}
+			if err := db.Create(&price).Error; err != nil {
+				t.Fatal(err)
+			}
+			pkg := models.Package{Name: "pack", UserID: u.ID, WorkspaceID: &ws.ID, NetWeightG: decimal("100"), UnitCost: decimal("0")}
+			if err := db.Create(&pkg).Error; err != nil {
+				t.Fatal(err)
+			}
+			p := models.Product{Name: "old", Price: 10, ProductType: "standard", CostMode: "recipe", CostRecipeID: &recipe.ID, PackageID: pkg.ID, WorkspaceID: &ws.ID, UserID: u.ID}
+			if method == "PUT" {
+				if err := db.Create(&p).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+			reached, release := make(chan struct{}), make(chan struct{})
+			var once, releaseOnce sync.Once
+			unblock := func() { releaseOnce.Do(func() { close(release) }) }
+			t.Cleanup(unblock)
+			var wrote atomic.Bool
+			readReached, readRelease := make(chan struct{}), make(chan struct{})
+			var readOnce, readReleaseOnce sync.Once
+			releaseRead := func() { readReleaseOnce.Do(func() { close(readRelease) }) }
+			t.Cleanup(releaseRead)
+			if err := db.Callback().Query().After("gorm:query").Register("test:response_read_barrier", func(tx *gorm.DB) {
+				if wrote.Load() && tx.Statement.Table == "products" {
+					readOnce.Do(func() { close(readReached); <-readRelease })
+				}
+			}); err != nil {
+				t.Fatal(err)
+			}
+			callback := func(tx *gorm.DB) {
+				if tx.Statement.Table == "products" {
+					once.Do(func() { close(reached); <-release; wrote.Store(true) })
+				}
+			}
+			if method == "POST" {
+				if err := db.Callback().Create().After("gorm:create").Register("test:response_barrier", callback); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err := db.Callback().Update().After("gorm:update").Register("test:response_barrier", callback); err != nil {
+					t.Fatal(err)
+				}
+			}
+			router := gin.New()
+			router.Use(func(c *gin.Context) { c.Set("userID", u.ID); c.Set("workspaceID", ws.ID) })
+			router.POST("/products", controllers.CreateProduct)
+			router.PUT("/products/:id", controllers.UpdateProduct)
+			body := map[string]any{"name": "saved", "price": 10, "package_id": pkg.ID, "product_type": "standard", "cost_mode": "recipe", "recipe_id": recipe.ID, "cost_recipe_id": recipe.ID}
+			path := "/products"
+			if method == "PUT" {
+				path = fmt.Sprintf("/products/%d", p.ID)
+				body["configuration_version"] = p.ConfigurationVersion
+			}
+			done := make(chan *httptest.ResponseRecorder, 1)
+			go func() {
+				data, _ := json.Marshal(body)
+				req := httptest.NewRequest(method, path, bytes.NewReader(data))
+				req.Header.Set("Content-Type", "application/json")
+				w := httptest.NewRecorder()
+				router.ServeHTTP(w, req)
+				done <- w
+			}()
+			select {
+			case <-reached:
+			case <-time.After(5 * time.Second):
+				t.Fatal("write did not reach barrier")
+			}
+			err := db.Transaction(func(tx *gorm.DB) error {
+				if err := tx.Model(&recipe).Update("planned_yield_g", "200").Error; err != nil {
+					return err
+				}
+				return tx.Model(&price).Update("price", 400).Error
+			})
+			if err != nil {
+				unblock()
+				t.Fatal(err)
+			}
+			unblock()
+			select {
+			case <-readReached:
+			case <-time.After(5 * time.Second):
+				t.Fatal("fresh response read did not reach barrier")
+			}
+			err = db.Transaction(func(tx *gorm.DB) error {
+				if err := tx.Model(&recipe).Update("planned_yield_g", "400").Error; err != nil {
+					return err
+				}
+				return tx.Model(&price).Update("price", 1600).Error
+			})
+			if err != nil {
+				releaseRead()
+				t.Fatal(err)
+			}
+			releaseRead()
+			var response *httptest.ResponseRecorder
+			select {
+			case response = <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("write did not finish")
+			}
+			want := 201
+			if method == "PUT" {
+				want = 200
+			}
+			if response.Code != want {
+				t.Fatalf("response %d %s", response.Code, response.Body)
+			}
+			var saved models.Product
+			if err := json.Unmarshal(response.Body.Bytes(), &saved); err != nil {
+				t.Fatal(err)
+			}
+			if saved.CostEstimate == nil || saved.CostEstimate.TotalCost == nil || *saved.CostEstimate.TotalCost != 200 {
+				t.Fatalf("response reused old or mixed snapshot: %s", response.Body)
+			}
+		})
+	}
 }

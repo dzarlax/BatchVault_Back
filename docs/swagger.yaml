@@ -78,10 +78,17 @@ definitions:
     - password
     - username
     type: object
+  controllers.WorkspaceCapabilities:
+    properties:
+      product_types_v1:
+        type: boolean
+    type: object
   controllers.WorkspaceResponse:
     properties:
       account_id:
         type: integer
+      capabilities:
+        $ref: '#/definitions/controllers.WorkspaceCapabilities'
       currency:
         type: string
       id:
@@ -138,10 +145,21 @@ definitions:
     type: object
   controllers.productWriteDocumentation:
     properties:
+      assortment_components:
+        items:
+          $ref: '#/definitions/models.ProductAssortmentComponent'
+        type: array
       components:
         items:
           $ref: '#/definitions/models.ProductCostComponentInput'
         type: array
+      composition_basis:
+        enum:
+        - products
+        - legacy_recipes
+        type: string
+      configuration_version:
+        type: integer
       cost:
         type: number
       cost_mode:
@@ -162,6 +180,13 @@ definitions:
         type: integer
       price:
         type: number
+      product_type:
+        enum:
+        - standard
+        - assortment
+        type: string
+      recipe_id:
+        type: integer
       recipe_ids:
         items:
           type: integer
@@ -267,6 +292,31 @@ definitions:
     - name
     - surname
     type: object
+  models.CompositionDetail:
+    properties:
+      component_product_id:
+        type: integer
+      content_cost:
+        type: number
+      cost_per_gram:
+        type: number
+      issues:
+        items:
+          $ref: '#/definitions/models.CostIssue'
+        type: array
+      position:
+        type: integer
+      product_name:
+        type: string
+      quantity_g:
+        type: number
+      recipe_id:
+        type: integer
+      recipe_name:
+        type: string
+      status:
+        type: string
+    type: object
   models.CookingSession:
     properties:
       created_at:
@@ -340,6 +390,8 @@ definitions:
     type: object
   models.CostComponentEstimate:
     properties:
+      component_product_id:
+        type: integer
       content_cost:
         type: number
       cost_per_gram:
@@ -362,6 +414,10 @@ definitions:
       components:
         items:
           $ref: '#/definitions/models.CostComponentEstimate'
+        type: array
+      composition_details:
+        items:
+          $ref: '#/definitions/models.CompositionDetail'
         type: array
       content_cost:
         type: number
@@ -396,6 +452,8 @@ definitions:
     properties:
       code:
         type: string
+      component_product_id:
+        type: integer
       ingredient_id:
         type: integer
       message:
@@ -412,6 +470,32 @@ definitions:
       ingredient_id:
         type: integer
     type: object
+  models.CostProvenance:
+    properties:
+      components:
+        items:
+          $ref: '#/definitions/models.CompositionDetail'
+        type: array
+      composition_basis:
+        type: string
+      package:
+        $ref: '#/definitions/models.CostProvenancePackage'
+      product_name:
+        type: string
+      product_type:
+        type: string
+    type: object
+  models.CostProvenancePackage:
+    properties:
+      id:
+        type: integer
+      name:
+        type: string
+      net_weight_g:
+        type: number
+      unit_cost:
+        type: number
+    type: object
   models.CostSnapshot:
     properties:
       amount:
@@ -420,6 +504,8 @@ definitions:
         type: string
       estimate:
         $ref: '#/definitions/models.CostEstimate'
+      provenance:
+        $ref: '#/definitions/models.CostProvenance'
       source:
         type: string
       version:
@@ -611,10 +697,18 @@ definitions:
     type: object
   models.Product:
     properties:
+      assortment_components:
+        items:
+          $ref: '#/definitions/models.ProductAssortmentComponent'
+        type: array
       components:
         items:
           $ref: '#/definitions/models.ProductCostComponent'
         type: array
+      composition_basis:
+        type: string
+      configuration_version:
+        type: integer
       cost:
         minimum: 0
         type: number
@@ -649,6 +743,10 @@ definitions:
       price:
         minimum: 0
         type: number
+      product_type:
+        type: string
+      recipe_id:
+        type: integer
       updated_at:
         type: string
       user:
@@ -662,6 +760,15 @@ definitions:
     required:
     - name
     - price
+    type: object
+  models.ProductAssortmentComponent:
+    properties:
+      component_product_id:
+        type: integer
+      position:
+        type: integer
+      quantity_g:
+        type: number
     type: object
   models.ProductCostComponent:
     properties:
@@ -691,10 +798,16 @@ definitions:
     type: object
   models.ProductCostPreviewInput:
     properties:
+      assortment_components:
+        items:
+          $ref: '#/definitions/models.ProductAssortmentComponent'
+        type: array
       components:
         items:
           $ref: '#/definitions/models.ProductCostComponentInput'
         type: array
+      composition_basis:
+        type: string
       cost:
         type: number
       cost_mode:
@@ -702,6 +815,10 @@ definitions:
       cost_recipe_id:
         type: integer
       package_id:
+        type: integer
+      product_type:
+        type: string
+      recipe_id:
         type: integer
     type: object
   models.ProductOption:

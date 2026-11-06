@@ -43,6 +43,10 @@ func ConnectDatabase() {
 		log.Fatal("Price quantity migration error: ", err)
 	}
 
+	if err := PrepareProductTypes(DB); err != nil {
+		log.Fatal("Product type preparation error: ", err)
+	}
+
 	// Auto-migrate all models
 	err = DB.AutoMigrate(
 		&models.User{},
@@ -60,6 +64,7 @@ func ConnectDatabase() {
 		&models.Package{},
 		&models.ProductOption{},
 		&models.ProductCostComponent{},
+		&models.ProductAssortmentComponent{},
 		&models.Order{},
 		&models.OrderItem{},
 		&models.PushDevice{},

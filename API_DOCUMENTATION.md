@@ -1235,3 +1235,21 @@ Package PATCH uses PostgreSQL READ COMMITTED while holding the same package row 
 The opt-in controller test `TestPackageMutationObservesProductCommittedWhileWaiting` uses actual concurrent handlers, an insert barrier and an observed PostgreSQL lock wait. Set `COSTING_TEST_DATABASE_URL` to an isolated local database named `costing_test` and run `go test ./controllers ./database -run 'PackageMutation|ProductCostingPostgres' -count=1`. The fixtures create and drop unique schemas; no production database is accepted.
 
 Web `npm run test:costing` checks the shared network quote-refresh operation. `npm run test:costing:browser` is opt-in against synthetic localhost fixtures and verifies both order surfaces through 409, refresh and save. iOS `OrderCostReviewTests` covers quote fetches, historical selection restoration, price retention and late-response rejection. Android `OrdersViewModelRecoveryTest` covers per-order pending reads and editor navigation after successful PUT/failed GET.
+
+Product type configuration can be disabled with `PRODUCT_TYPES_V1_ENABLED=false`.
+Workspace responses expose `capabilities.product_types_v1`; existing product
+reads remain available while new product type configuration writes are disabled.
+
+Product writes using `product_types_v1` specify `product_type` (`standard` or
+`assortment`) and an update `configuration_version`. `recipe_id` and
+`cost_recipe_id` are nullable aliases for a standard product's primary recipe;
+if both are supplied they must agree. Product-based assortments use
+`composition_basis: "products"` and `assortment_components` entries with
+`component_product_id`, `quantity_g`, and `position`. Recipe-based legacy
+assortments use `composition_basis: "legacy_recipes"` and `components`.
+Conversion requires explicit product entries. A manual cost is the whole unit
+cost including packaging; automatic costing uses component recipe rates and
+adds the assortment package once. Missing inputs leave automatic total cost
+null. A 409 requires refreshing configuration or using a current client. A
+successful write with `refresh_required: true` is already committed; clients
+should retry GET rather than resubmit it.
