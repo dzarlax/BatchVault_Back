@@ -120,6 +120,9 @@ func UpdatePackage(c *gin.Context) {
 	workspaceID := c.MustGet("workspaceID").(uint)
 	var pkg models.Package
 	err = database.PackageMutationTransaction(database.DB, func(tx *gorm.DB) error {
+		if err := database.LockProductGraph(tx, workspaceID); err != nil {
+			return err
+		}
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND workspace_id = ?", id, workspaceID).First(&pkg).Error; err != nil {
 			return err
 		}
@@ -145,18 +148,28 @@ func UpdatePackage(c *gin.Context) {
 					return costConflict("package_initialization_requires_confirmation", "Review linked products and confirm first-time weight initialization")
 				}
 				var products []models.Product
-				if err := tx.Where("package_id = ? AND workspace_id = ? AND cost_mode = ?", id, workspaceID, models.CostModeAssortment).Preload("CostComponents", "workspace_id = ?", workspaceID).Find(&products).Error; err != nil {
+				if err := tx.Where("package_id = ? AND workspace_id = ? AND (product_type = ? OR cost_mode = ?)", id, workspaceID, "assortment", models.CostModeAssortment).Preload("CostComponents", "workspace_id = ?", workspaceID).Preload("AssortmentComponents", "workspace_id = ?", workspaceID).Find(&products).Error; err != nil {
 					return err
 				}
 				weight, _ := services.ParseCostDecimal(string(*input.NetWeightG.Value))
 				for _, p := range products {
 					sum := new(big.Rat)
-					for _, row := range p.CostComponents {
-						q, err := services.ParseCostDecimal(string(row.QuantityG))
-						if err != nil {
-							return costConflict("weight_mismatch", "Review the assortment composition before initializing package weight")
+					if p.CompositionBasis != nil && *p.CompositionBasis == "products" {
+						for _, row := range p.AssortmentComponents {
+							q, err := services.ParseCostDecimal(string(row.QuantityG))
+							if err != nil {
+								return costConflict("weight_mismatch", "Review the assortment composition before initializing package weight")
+							}
+							sum.Add(sum, q)
 						}
-						sum.Add(sum, q)
+					} else {
+						for _, row := range p.CostComponents {
+							q, err := services.ParseCostDecimal(string(row.QuantityG))
+							if err != nil {
+								return costConflict("weight_mismatch", "Review the assortment composition before initializing package weight")
+							}
+							sum.Add(sum, q)
+						}
 					}
 					if sum.Cmp(weight) != 0 {
 						return costConflict("weight_mismatch", "A linked assortment does not match this weight; correct its composition or package assignment")

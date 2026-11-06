@@ -22,3 +22,11 @@ func PackageMutationTransaction(db *gorm.DB, fn func(*gorm.DB) error) error {
 	}
 	return db.Transaction(fn)
 }
+
+// LockProductGraph serializes workspace graph mutations before row locks.
+func LockProductGraph(tx *gorm.DB, workspaceID uint) error {
+	if tx.Dialector.Name() != "postgres" {
+		return nil
+	}
+	return tx.Exec("SELECT pg_advisory_xact_lock(?, ?)", 1112950358, int64(workspaceID)).Error
+}

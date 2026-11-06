@@ -2,6 +2,7 @@ package services
 
 import (
 	"encoding/json"
+	"fmt"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 	"math"
@@ -27,7 +28,7 @@ func newCostingFixture(t *testing.T) costingFixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { sqlDB, _ := db.DB(); _ = sqlDB.Close() })
-	if err := db.AutoMigrate(&models.User{}, &models.Workspace{}, &models.Ingredient{}, &models.Recipe{}, &models.RecipeIngredient{}, &models.Price{}, &models.Package{}, &models.Product{}, &models.ProductCostComponent{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Workspace{}, &models.Ingredient{}, &models.Recipe{}, &models.RecipeIngredient{}, &models.Price{}, &models.Package{}, &models.Product{}, &models.ProductCostComponent{}, &models.ProductAssortmentComponent{}); err != nil {
 		t.Fatal(err)
 	}
 	user := models.User{Username: "costing-user", Password: "hashed"}
@@ -205,5 +206,183 @@ func TestCostingFiveFlavoursUsesOneCommonPackage(t *testing.T) {
 	assertCost(t, e, 770)
 	if e.PackagingCost == nil || *e.PackagingCost != 20 || e.ContentCost == nil || *e.ContentCost != 750 || len(e.Components) != 5 {
 		t.Fatalf("packaging counted more than once: %+v", e)
+	}
+}
+
+func TestProductAssortmentUsesPrimaryRecipesAndManualAmount(t *testing.T) {
+	f := newCostingFixture(t)
+	a := models.Product{Name: "A", ProductType: "standard", CostMode: "manual", Cost: 999, CostRecipeID: &f.recipeA.ID, PackageID: f.pkg.ID, WorkspaceID: &f.workspace.ID}
+	b := models.Product{Name: "B", ProductType: "standard", CostMode: "recipe", CostRecipeID: &f.recipeB.ID, PackageID: f.pkg.ID, WorkspaceID: &f.workspace.ID}
+	if err := f.db.Create(&a).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.Create(&b).Error; err != nil {
+		t.Fatal(err)
+	}
+	basis := "products"
+	p := models.Product{ProductType: "assortment", CompositionBasis: &basis, CostMode: "assortment", PackageID: f.pkg.ID, AssortmentComponents: []models.ProductAssortmentComponent{{ComponentProductID: a.ID, QuantityG: "50"}, {ComponentProductID: b.ID, QuantityG: "50"}}}
+	if err := NewCosting(f.db, f.workspace.ID).ValidateProductConfig(p); err != nil {
+		t.Fatal(err)
+	}
+	e := estimateForTest(t, f, p)
+	assertCost(t, e, 260)
+	if len(e.CompositionDetails) != 2 || len(e.Components) != 2 {
+		t.Fatalf("missing composition: %+v", e)
+	}
+	p.CostMode = "manual"
+	p.Cost = 290
+	assertCost(t, estimateForTest(t, f, p), 290)
+	p.AssortmentComponents[1].ComponentProductID = a.ID
+	if err := NewCosting(f.db, f.workspace.ID).ValidateProductConfig(p); err == nil {
+		t.Fatal("duplicate product accepted")
+	}
+}
+
+func TestProductAssortmentRoundsOnlyFinalSumAndReportsMissingRecipe(t *testing.T) {
+	f := newCostingFixture(t)
+	if err := f.db.Model(&models.Price{}).Where("ingredient_id = ?", f.ingredientA.ID).Update("price", 1).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.Model(&models.Recipe{}).Where("id = ?", f.recipeA.ID).Update("planned_yield_g", "3").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.Model(&models.Package{}).Where("id = ?", f.pkg.ID).Updates(map[string]any{"net_weight_g": "2", "unit_cost": "0"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	a := models.Product{Name: "One", ProductType: "standard", CostMode: "manual", Cost: 999, CostRecipeID: &f.recipeA.ID, PackageID: f.pkg.ID, WorkspaceID: &f.workspace.ID}
+	b := models.Product{Name: "Two", ProductType: "standard", CostMode: "manual", Cost: 1, CostRecipeID: &f.recipeA.ID, PackageID: f.pkg.ID, WorkspaceID: &f.workspace.ID}
+	if err := f.db.Create(&a).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.Create(&b).Error; err != nil {
+		t.Fatal(err)
+	}
+	basis := "products"
+	p := models.Product{ProductType: "assortment", CompositionBasis: &basis, CostMode: "assortment", PackageID: f.pkg.ID, AssortmentComponents: []models.ProductAssortmentComponent{{ComponentProductID: a.ID, QuantityG: "1"}, {ComponentProductID: b.ID, QuantityG: "1"}}}
+	assertCost(t, estimateForTest(t, f, p), 0.67)
+	if err := f.db.Model(&b).Update("cost_recipe_id", nil).Error; err != nil {
+		t.Fatal(err)
+	}
+	e := estimateForTest(t, f, p)
+	if e.Status != "incomplete" || e.TotalCost != nil || len(e.Components) != 1 || len(e.CompositionDetails) != 2 || e.CompositionDetails[1].RecipeID != nil {
+		t.Fatalf("missing recipe: %+v", e)
+	}
+}
+
+func TestFiveFlavourProductAssortment(t *testing.T) {
+	f := newCostingFixture(t)
+	if err := f.db.Model(&models.Package{}).Where("id = ?", f.pkg.ID).Updates(map[string]any{"net_weight_g": "250", "unit_cost": "20"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	basis := "products"
+	mix := models.Product{ProductType: "assortment", CompositionBasis: &basis, CostMode: "assortment", PackageID: f.pkg.ID}
+	for i, price := range []float64{400, 500, 600, 450, 550} {
+		ingredient := models.Ingredient{Name: fmt.Sprintf("flavour %d", i), Type: "meat"}
+		if err := f.db.Create(&ingredient).Error; err != nil {
+			t.Fatal(err)
+		}
+		recipe := models.Recipe{Name: ingredient.Name, WorkspaceID: &f.workspace.ID, PlannedYieldG: decimalForTest("500")}
+		if err := f.db.Create(&recipe).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := f.db.Create(&models.RecipeIngredient{RecipeID: recipe.ID, IngredientID: ingredient.ID, Quantity: "1", Unit: "kg"}).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := f.db.Create(&models.Price{IngredientID: ingredient.ID, Price: price, Quantity: 1, Unit: "kg", WorkspaceID: &f.workspace.ID, Date: time.Now()}).Error; err != nil {
+			t.Fatal(err)
+		}
+		source := models.Product{Name: ingredient.Name, ProductType: "standard", CostMode: "manual", Cost: 999, CostRecipeID: &recipe.ID, WorkspaceID: &f.workspace.ID, PackageID: f.pkg.ID}
+		if err := f.db.Create(&source).Error; err != nil {
+			t.Fatal(err)
+		}
+		mix.AssortmentComponents = append(mix.AssortmentComponents, models.ProductAssortmentComponent{ComponentProductID: source.ID, QuantityG: "50", Position: i})
+	}
+	assertCost(t, estimateForTest(t, f, mix), 270)
+	mix.CostMode = "manual"
+	mix.Cost = 290
+	assertCost(t, estimateForTest(t, f, mix), 290)
+}
+
+func TestStandardCost135AndAssortmentValidation(t *testing.T) {
+	f := newCostingFixture(t)
+	if err := f.db.Model(&models.Price{}).Where("ingredient_id = ?", f.ingredientA.ID).Update("price", 375).Error; err != nil {
+		t.Fatal(err)
+	}
+	assertCost(t, estimateForTest(t, f, models.Product{CostMode: "recipe", CostRecipeID: &f.recipeA.ID, PackageID: f.pkg.ID}), 135)
+	a := models.Product{Name: "A", ProductType: "standard", CostMode: "manual", PackageID: f.pkg.ID, WorkspaceID: &f.workspace.ID}
+	b := models.Product{Name: "B", ProductType: "standard", CostMode: "manual", PackageID: f.pkg.ID, WorkspaceID: &f.workspace.ID}
+	nested := models.Product{Name: "Nested", ProductType: "assortment", CostMode: "manual", PackageID: f.pkg.ID, WorkspaceID: &f.workspace.ID}
+	other := models.Workspace{Name: "Other", Slug: "other-validation"}
+	if err := f.db.Create(&other).Error; err != nil {
+		t.Fatal(err)
+	}
+	foreign := models.Product{Name: "Foreign", ProductType: "standard", CostMode: "manual", PackageID: f.pkg.ID, WorkspaceID: &other.ID}
+	for _, p := range []*models.Product{&a, &b, &nested, &foreign} {
+		if err := f.db.Create(p).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	basis := "products"
+	p := models.Product{ProductType: "assortment", CompositionBasis: &basis, CostMode: "manual", PackageID: f.pkg.ID, AssortmentComponents: []models.ProductAssortmentComponent{{ComponentProductID: a.ID, QuantityG: "50"}, {ComponentProductID: b.ID, QuantityG: "50"}}}
+	for _, tc := range []struct {
+		name   string
+		change func(*models.Product)
+	}{
+		{"zero", func(p *models.Product) { p.AssortmentComponents[0].QuantityG = "0" }},
+		{"precision", func(p *models.Product) { p.AssortmentComponents[0].QuantityG = "50.0001" }},
+		{"duplicate", func(p *models.Product) { p.AssortmentComponents[1].ComponentProductID = a.ID }},
+		{"foreign", func(p *models.Product) { p.AssortmentComponents[1].ComponentProductID = foreign.ID }},
+		{"nested", func(p *models.Product) { p.AssortmentComponents[1].ComponentProductID = nested.ID }},
+		{"mismatch", func(p *models.Product) { p.AssortmentComponents[1].QuantityG = "49" }},
+		{"self", func(p *models.Product) { p.ID = a.ID }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			candidate := p
+			candidate.AssortmentComponents = append([]models.ProductAssortmentComponent(nil), p.AssortmentComponents...)
+			tc.change(&candidate)
+			if err := NewCosting(f.db, f.workspace.ID).ValidateProductConfig(candidate); err == nil {
+				t.Fatal("invalid composition accepted")
+			}
+		})
+	}
+}
+
+func TestAssortmentCatalogReadsAreBatched(t *testing.T) {
+	f := newCostingFixture(t)
+	basis := "products"
+	a := models.Product{Name: "A", ProductType: "standard", CostMode: "manual", CostRecipeID: &f.recipeA.ID, PackageID: f.pkg.ID, WorkspaceID: &f.workspace.ID}
+	b := models.Product{Name: "B", ProductType: "standard", CostMode: "manual", CostRecipeID: &f.recipeB.ID, PackageID: f.pkg.ID, WorkspaceID: &f.workspace.ID}
+	for _, p := range []*models.Product{&a, &b} {
+		if err := f.db.Create(p).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	parents := []models.Product{}
+	for i := 0; i < 20; i++ {
+		p := models.Product{Name: fmt.Sprintf("mix %d", i), ProductType: "assortment", CompositionBasis: &basis, CostMode: "assortment", PackageID: f.pkg.ID, WorkspaceID: &f.workspace.ID}
+		if err := f.db.Create(&p).Error; err != nil {
+			t.Fatal(err)
+		}
+		for _, row := range []models.ProductAssortmentComponent{{WorkspaceID: f.workspace.ID, ProductID: p.ID, ComponentProductID: a.ID, QuantityG: "50"}, {WorkspaceID: f.workspace.ID, ProductID: p.ID, ComponentProductID: b.ID, QuantityG: "50"}} {
+			if err := f.db.Create(&row).Error; err != nil {
+				t.Fatal(err)
+			}
+		}
+		parents = append(parents, p)
+	}
+	count := 0
+	if err := f.db.Callback().Query().Before("gorm:query").Register("test:count_catalog", func(*gorm.DB) { count++ }); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewCosting(f.db, f.workspace.ID).AttachProducts(parents[:2]); err != nil {
+		t.Fatal(err)
+	}
+	small := count
+	count = 0
+	if err := NewCosting(f.db, f.workspace.ID).AttachProducts(parents); err != nil {
+		t.Fatal(err)
+	}
+	if count != small {
+		t.Fatalf("queries grow with catalog: 2 parents %d, 20 parents %d", small, count)
 	}
 }

@@ -101,7 +101,7 @@ func resolveNewOrderCost(product models.Product, assertion *float64, forceManual
 		if math.IsNaN(amount) || math.IsInf(amount, 0) || amount < 0 {
 			return 0, nil, costConflict("cost_incomplete", "Manual product cost is invalid")
 		}
-		return amount, services.NewCostSnapshot(models.CostModeManual, amount, nil), nil
+		return amount, snapshotWithProvenance(product, models.CostModeManual, amount, nil), nil
 	}
 	estimate := product.CostEstimate
 	if estimate == nil || estimate.Status != "complete" || estimate.TotalCost == nil {
@@ -111,7 +111,7 @@ func resolveNewOrderCost(product models.Product, assertion *float64, forceManual
 	if assertion != nil && !services.CostAssertionMatches(*assertion, amount) {
 		return 0, nil, costConflict("cost_changed", "Product cost changed; refresh the estimate and review it before saving")
 	}
-	return amount, services.NewCostSnapshot(product.CostMode, amount, estimate), nil
+	return amount, snapshotWithProvenance(product, product.CostMode, amount, estimate), nil
 }
 
 func addCostedOrder(c *gin.Context) {
@@ -255,9 +255,7 @@ func updateCostedOrder(c *gin.Context) {
 			candidate.needsCurrent = candidate.saved == nil || candidate.saved.ProductID != row.ProductID
 			if candidate.needsCurrent {
 				ids = append(ids, row.ProductID)
-				if !candidate.forceManual {
-					calculate[row.ProductID] = true
-				}
+				calculate[row.ProductID] = true
 			}
 			pending = append(pending, candidate)
 		}
@@ -287,7 +285,13 @@ func updateCostedOrder(c *gin.Context) {
 					}
 				} else if row.CostPrice != nil && *row.CostPrice != item.Cost_price {
 					item.Cost_price = *row.CostPrice
-					item.CostSnapshot = services.NewCostSnapshot(models.CostModeManual, *row.CostPrice, nil)
+					if item.CostSnapshot == nil {
+						item.CostSnapshot = services.NewCostSnapshot(models.CostModeManual, *row.CostPrice, nil)
+					} else {
+						copy := *item.CostSnapshot
+						copy.Amount = *row.CostPrice
+						item.CostSnapshot = &copy
+					}
 				}
 			}
 			items = append(items, item)
@@ -323,4 +327,14 @@ func updateCostedOrder(c *gin.Context) {
 		dispatchOrderNotification(orderNotificationType(input.Status), id, workspaceID)
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "Order updated successfully"})
+}
+
+func snapshotWithProvenance(product models.Product, source string, amount float64, estimate *models.CostEstimate) *models.CostSnapshot {
+	snapshot := services.NewCostSnapshot(source, amount, estimate)
+	details := []models.CompositionDetail{}
+	if product.CostEstimate != nil && product.CostEstimate.CompositionDetails != nil {
+		details = product.CostEstimate.CompositionDetails
+	}
+	snapshot.Provenance = &models.CostProvenance{ProductType: product.ProductType, ProductName: product.Name, CompositionBasis: product.CompositionBasis, Components: details, Package: models.CostProvenancePackage{ID: product.Package.ID, Name: product.Package.Name, NetWeightG: product.Package.NetWeightG, UnitCost: product.Package.UnitCost}}
+	return snapshot
 }

@@ -20,15 +20,16 @@ type recipeCost struct {
 
 // Costing loads a workspace's costing graph once within its caller's transaction.
 type Costing struct {
-	db          *gorm.DB
-	workspaceID uint
-	recipes     map[uint]*recipeCost
-	packages    map[uint]models.Package
-	now         time.Time
+	db                *gorm.DB
+	workspaceID       uint
+	recipes           map[uint]*recipeCost
+	packages          map[uint]models.Package
+	now               time.Time
+	componentProducts map[uint]models.Product
 }
 
 func NewCosting(db *gorm.DB, workspaceID uint) *Costing {
-	return &Costing{db: db, workspaceID: workspaceID, recipes: map[uint]*recipeCost{}, packages: map[uint]models.Package{}, now: time.Now().UTC()}
+	return &Costing{db: db, workspaceID: workspaceID, recipes: map[uint]*recipeCost{}, packages: map[uint]models.Package{}, componentProducts: map[uint]models.Product{}, now: time.Now().UTC()}
 }
 
 func (s *Costing) emptyEstimate(source string) models.CostEstimate {
@@ -176,7 +177,7 @@ func (s *Costing) AttachRecipes(recipes []models.Recipe) error {
 func (s *Costing) AttachProducts(products []models.Product) error {
 	assortmentIDs, recipeIDs, packageIDs := []uint{}, []uint{}, []uint{}
 	for _, p := range products {
-		if p.CostMode == models.CostModeAssortment && p.ID != 0 {
+		if (p.CostMode == models.CostModeAssortment || (p.ProductType == "assortment" && p.CompositionBasis != nil && *p.CompositionBasis == "legacy_recipes")) && p.ID != 0 {
 			assortmentIDs = append(assortmentIDs, p.ID)
 		}
 	}
@@ -190,15 +191,71 @@ func (s *Costing) AttachProducts(products []models.Product) error {
 			components[row.ProductID] = append(components[row.ProductID], row)
 		}
 	}
+	productAssortmentIDs := []uint{}
+	for _, p := range products {
+		if p.ID != 0 && p.ProductType == "assortment" && p.CompositionBasis != nil && *p.CompositionBasis == "products" {
+			productAssortmentIDs = append(productAssortmentIDs, p.ID)
+		}
+	}
+	productComponents := map[uint][]models.ProductAssortmentComponent{}
+	if len(productAssortmentIDs) > 0 {
+		var rows []models.ProductAssortmentComponent
+		if err := s.db.Where("workspace_id = ? AND product_id IN ?", s.workspaceID, productAssortmentIDs).Order("position, id").Find(&rows).Error; err != nil {
+			return err
+		}
+		for _, row := range rows {
+			productComponents[row.ProductID] = append(productComponents[row.ProductID], row)
+		}
+	}
+	sourceIDs := []uint{}
+	sourceSeen := map[uint]bool{}
 	for i := range products {
 		p := &products[i]
-		if p.CostMode == models.CostModeAssortment && p.ID != 0 {
-			p.CostComponents = components[p.ID]
-		}
-		if p.CostMode != models.CostModeRecipe && p.CostMode != models.CostModeAssortment {
+		if p.ProductType != "assortment" || p.CompositionBasis == nil || *p.CompositionBasis != "products" {
 			continue
 		}
+		if p.ID != 0 {
+			p.AssortmentComponents = productComponents[p.ID]
+		}
+		for _, row := range p.AssortmentComponents {
+			if !sourceSeen[row.ComponentProductID] {
+				sourceIDs = append(sourceIDs, row.ComponentProductID)
+				sourceSeen[row.ComponentProductID] = true
+			}
+		}
+	}
+	if len(sourceIDs) > 0 {
+		var sources []models.Product
+		if err := s.db.Where("workspace_id = ? AND id IN ?", s.workspaceID, sourceIDs).Find(&sources).Error; err != nil {
+			return err
+		}
+		for _, source := range sources {
+			s.componentProducts[source.ID] = source
+			if source.CostRecipeID != nil {
+				recipeIDs = append(recipeIDs, *source.CostRecipeID)
+			}
+		}
+	}
+	for i := range products {
+		p := &products[i]
+		if p.CostComponents == nil {
+			p.CostComponents = []models.ProductCostComponent{}
+		}
+		if p.AssortmentComponents == nil {
+			p.AssortmentComponents = []models.ProductAssortmentComponent{}
+		}
+		p.RecipeID = p.CostRecipeID
+
+		if (p.CostMode == models.CostModeAssortment || (p.ProductType == "assortment" && p.CompositionBasis != nil && *p.CompositionBasis == "legacy_recipes")) && p.ID != 0 {
+			p.CostComponents = components[p.ID]
+			if p.CostComponents == nil {
+				p.CostComponents = []models.ProductCostComponent{}
+			}
+		}
 		packageIDs = append(packageIDs, p.PackageID)
+		if p.CostMode != models.CostModeRecipe && p.CostMode != models.CostModeAssortment && !(p.ProductType == "assortment" && p.CompositionBasis != nil && *p.CompositionBasis == "legacy_recipes") {
+			continue
+		}
 		if p.CostRecipeID != nil {
 			recipeIDs = append(recipeIDs, *p.CostRecipeID)
 		}
@@ -219,7 +276,39 @@ func (s *Costing) AttachProducts(products []models.Product) error {
 		}
 	}
 	for i := range products {
-		products[i].CostEstimate = s.calculateProduct(products[i])
+		if pkg, ok := s.packages[products[i].PackageID]; ok {
+			products[i].Package = pkg
+		}
+		if products[i].ProductType == "assortment" && products[i].CompositionBasis != nil && *products[i].CompositionBasis == "products" {
+			products[i].CostEstimate = s.calculateProductAssortment(products[i])
+		} else if products[i].ProductType == "assortment" && products[i].CompositionBasis != nil && *products[i].CompositionBasis == "legacy_recipes" {
+			p := products[i]
+			manual := p.CostMode == models.CostModeManual
+			if manual {
+				p.CostMode = models.CostModeAssortment
+			}
+			e := s.calculateProduct(p)
+			e.CompositionDetails = []models.CompositionDetail{}
+			for pos, component := range e.Components {
+				id := component.RecipeID
+				name := component.Name
+				detail := models.CompositionDetail{RecipeID: &id, RecipeName: &name, ProductName: name, QuantityG: component.QuantityG, Position: pos, Status: "incomplete", CostPerGram: component.CostPerGram, ContentCost: component.ContentCost, Issues: []models.CostIssue{}}
+				if component.CostPerGram != nil {
+					detail.Status = "complete"
+				}
+				e.CompositionDetails = append(e.CompositionDetails, detail)
+			}
+			if manual {
+				e.Source = models.CostModeManual
+				e.Status = "complete"
+				e.TotalCost = &products[i].Cost
+				e.ContentCost = nil
+				e.PackagingCost = nil
+			}
+			products[i].CostEstimate = e
+		} else {
+			products[i].CostEstimate = s.calculateProduct(products[i])
+		}
 	}
 	return nil
 }
@@ -317,6 +406,9 @@ func invalidCostConfig(message string) error { return &CostConfigError{Message: 
 
 // ValidateProductConfig checks structure and ownership; missing readiness inputs are allowed.
 func (s *Costing) ValidateProductConfig(product models.Product) error {
+	if product.ProductType != "" && product.ProductType != "standard" && product.ProductType != "assortment" {
+		return invalidCostConfig("invalid product_type")
+	}
 	if product.CostMode == "" {
 		product.CostMode = models.CostModeManual
 	}
@@ -328,6 +420,58 @@ func (s *Costing) ValidateProductConfig(product models.Product) error {
 		return err
 	}
 	s.packages[pkg.ID] = pkg
+	if product.ProductType == "assortment" && product.CompositionBasis != nil && *product.CompositionBasis == "products" {
+		if len(product.CostComponents) != 0 || product.CostRecipeID != nil || (product.CostMode != models.CostModeManual && product.CostMode != models.CostModeAssortment) || len(product.AssortmentComponents) < 2 {
+			return invalidCostConfig("assortment requires at least two product components and no recipe")
+		}
+		seen := map[uint]bool{}
+		sum := new(big.Rat)
+		ids := []uint{}
+		for _, row := range product.AssortmentComponents {
+			if row.ComponentProductID == 0 || row.ComponentProductID == product.ID || seen[row.ComponentProductID] || ValidateCostDecimal(&row.QuantityG, 3, false) != nil {
+				return invalidCostConfig("components require distinct ordinary products and positive grams with up to three decimals")
+			}
+			seen[row.ComponentProductID] = true
+			ids = append(ids, row.ComponentProductID)
+			q, _ := ParseCostDecimal(string(row.QuantityG))
+			sum.Add(sum, q)
+		}
+		var sources []models.Product
+		if err := s.db.Where("workspace_id = ? AND id IN ?", s.workspaceID, ids).Find(&sources).Error; err != nil {
+			return err
+		}
+		if len(sources) != len(ids) {
+			return invalidCostConfig("component product does not belong to this workspace")
+		}
+		for _, source := range sources {
+			if source.ProductType == "assortment" {
+				return invalidCostConfig("nested assortments are not allowed")
+			}
+		}
+		if weight, err := decimalValue(pkg.NetWeightG); err == nil && sum.Cmp(weight) != 0 {
+			return invalidCostConfig("component grams must equal the package net weight")
+		}
+		return nil
+	}
+	if product.ProductType == "standard" && (len(product.AssortmentComponents) > 0 || len(product.CostComponents) > 0) {
+		return invalidCostConfig("standard product cannot contain assortment components")
+	}
+	if product.ProductType == "standard" && product.CostMode == models.CostModeManual && product.CostRecipeID != nil {
+		var count int64
+		if err := s.db.Model(&models.Recipe{}).Where("workspace_id = ? AND id = ?", s.workspaceID, *product.CostRecipeID).Count(&count).Error; err != nil {
+			return err
+		}
+		if count != 1 {
+			return invalidCostConfig("costing recipe does not belong to this workspace")
+		}
+		return nil
+	}
+	if product.ProductType == "standard" && product.CostMode == models.CostModeAssortment {
+		return invalidCostConfig("standard product cannot use assortment costing")
+	}
+	if product.ProductType == "assortment" && product.CompositionBasis != nil && *product.CompositionBasis == "legacy_recipes" && product.CostMode == models.CostModeManual {
+		product.CostMode = models.CostModeAssortment
+	}
 	if product.CostMode == models.CostModeManual {
 		if product.CostRecipeID != nil || len(product.CostComponents) > 0 {
 			return invalidCostConfig("manual costing cannot have a costing recipe or components")
@@ -388,4 +532,73 @@ func IsCalculatedSnapshot(snapshot *models.CostSnapshot) (bool, error) {
 	default:
 		return false, fmt.Errorf("unsupported cost snapshot source")
 	}
+}
+
+func (s *Costing) calculateProductAssortment(p models.Product) *models.CostEstimate {
+	e := s.emptyEstimate(p.CostMode)
+	e.CompositionDetails = []models.CompositionDetail{}
+	pkg, exists := s.packages[p.PackageID]
+	e.PackageID, e.NetWeightG = p.PackageID, pkg.NetWeightG
+	weight, weightErr := decimalValue(pkg.NetWeightG)
+	packageCost, packageErr := decimalValue(pkg.UnitCost)
+	if p.CostMode != models.CostModeManual {
+		if !exists {
+			issue(&e, "missing_package", "Product package is unavailable", 0, 0)
+		}
+		if weightErr != nil || weight.Sign() <= 0 {
+			issue(&e, "missing_package_weight", "Set the package net product weight", 0, 0)
+		}
+		if packageErr != nil || packageCost.Sign() < 0 {
+			issue(&e, "missing_package_cost", "Set the cost of one package", 0, 0)
+		} else {
+			e.PackagingCost = approximateCost(packageCost)
+		}
+	}
+	sum, content := new(big.Rat), new(big.Rat)
+	for _, row := range p.AssortmentComponents {
+		id := row.ComponentProductID
+		source := s.componentProducts[id]
+		detail := models.CompositionDetail{ComponentProductID: &id, ProductName: source.Name, RecipeID: source.CostRecipeID, QuantityG: row.QuantityG, Position: row.Position, Status: "incomplete", Issues: []models.CostIssue{}}
+		qty, err := ParseCostDecimal(string(row.QuantityG))
+		if err == nil {
+			sum.Add(sum, qty)
+		}
+		if source.CostRecipeID == nil {
+			e.Issues = append(e.Issues, models.CostIssue{Code: "missing_recipe", Message: "Select a primary recipe", ComponentProductID: id})
+		} else if r := s.recipes[*source.CostRecipeID]; r != nil {
+			name := r.recipe.Name
+			detail.RecipeName = &name
+			component := models.CostComponentEstimate{ComponentProductID: &id, RecipeID: r.recipe.ID, Name: name, QuantityG: row.QuantityG, PlannedYieldG: r.recipe.PlannedYieldG, RecipeCost: approximateCost(r.batch)}
+			if r.rate != nil && err == nil {
+				c := new(big.Rat).Mul(r.rate, qty)
+				content.Add(content, c)
+				component.CostPerGram, component.ContentCost = approximateCost(r.rate), approximateCost(c)
+				detail.CostPerGram, detail.ContentCost, detail.Status = component.CostPerGram, component.ContentCost, "complete"
+			} else {
+				e.Issues = append(e.Issues, r.estimate.Issues...)
+			}
+			e.Components = append(e.Components, component)
+			e.Prices = append(e.Prices, r.estimate.Prices...)
+		} else {
+			e.Issues = append(e.Issues, models.CostIssue{Code: "missing_recipe", Message: "Component recipe is unavailable", ComponentProductID: id})
+		}
+		e.CompositionDetails = append(e.CompositionDetails, detail)
+	}
+	if weightErr == nil && sum.Cmp(weight) != 0 {
+		issue(&e, "weight_mismatch", "Component grams must equal the package net weight", 0, 0)
+	}
+	if p.CostMode == models.CostModeManual {
+		e.Status = "complete"
+		e.TotalCost = &p.Cost
+		return &e
+	}
+	if len(e.Issues) == 0 {
+		total, err := roundedCost(new(big.Rat).Add(content, packageCost))
+		if err == nil {
+			e.Status, e.TotalCost, e.ContentCost = "complete", total, approximateCost(content)
+		} else {
+			issue(&e, "amount_out_of_range", err.Error(), 0, 0)
+		}
+	}
+	return &e
 }

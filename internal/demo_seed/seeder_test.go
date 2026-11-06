@@ -37,7 +37,7 @@ func setupTestDB(t *testing.T) *gorm.DB {
 		&models.Package{},
 		&models.Product{},
 		&models.ProductOption{},
-		&models.ProductCostComponent{},
+		&models.ProductCostComponent{}, &models.ProductAssortmentComponent{},
 		&models.Client{},
 		&models.Order{},
 		&models.OrderItem{},

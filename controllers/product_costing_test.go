@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"mobile-backend-go/database"
 	"mobile-backend-go/models"
@@ -190,5 +191,310 @@ func TestCostPreviewDatabaseFailureIsServerError(t *testing.T) {
 	r := runWorkspaceJSONRequest(f.User.ID, f.PersonalWorkspace.ID, PreviewProductCost, "POST", "/products/cost-preview", "/products/cost-preview", body)
 	if r.Code != 500 {
 		t.Fatalf("database error became a partial or input result: %d %s", r.Code, r.Body)
+	}
+}
+
+func TestProductAssortmentCreateSwitchAndLegacyProtection(t *testing.T) {
+	f := setupCostingBusiness(t)
+	enableCalculatedProduct(t, f)
+	other := models.Product{Name: "Other", Price: 10, Cost: 999, CostMode: "manual", ProductType: "standard", CostRecipeID: &f.PersonalRecipe.ID, PackageID: f.PersonalPackage.ID, WorkspaceID: &f.PersonalWorkspace.ID, UserID: f.User.ID}
+	if err := database.DB.Create(&other).Error; err != nil {
+		t.Fatal(err)
+	}
+	body := map[string]any{"name": "Assortment", "price": 100, "package_id": f.PersonalPackage.ID, "product_type": "assortment", "composition_basis": "products", "cost_mode": "assortment", "assortment_components": []map[string]any{{"component_product_id": f.PersonalProduct.ID, "quantity_g": 50, "position": 0}, {"component_product_id": other.ID, "quantity_g": 50, "position": 1}}}
+	r := runWorkspaceJSONRequest(f.User.ID, f.PersonalWorkspace.ID, CreateProduct, "POST", "/products", "/products", body)
+	if r.Code != 201 {
+		t.Fatalf("create: %d %s", r.Code, r.Body)
+	}
+	var p models.Product
+	if err := json.Unmarshal(r.Body.Bytes(), &p); err != nil {
+		t.Fatal(err)
+	}
+	if p.CostEstimate == nil || p.CostEstimate.TotalCost == nil || *p.CostEstimate.TotalCost != 310 || len(p.CostEstimate.CompositionDetails) != 2 {
+		t.Fatalf("unexpected product: %+v", p)
+	}
+	body["configuration_version"] = p.ConfigurationVersion
+	body["cost_mode"] = "manual"
+	body["cost"] = 290
+	r = runWorkspaceJSONRequest(f.User.ID, f.PersonalWorkspace.ID, UpdateProduct, "PUT", "/products/:id", fmt.Sprintf("/products/%d", p.ID), body)
+	if r.Code != 200 {
+		t.Fatalf("manual switch: %d %s", r.Code, r.Body)
+	}
+	if err := json.Unmarshal(r.Body.Bytes(), &p); err != nil {
+		t.Fatal(err)
+	}
+	if p.CostEstimate == nil || *p.CostEstimate.TotalCost != 290 || len(p.AssortmentComponents) != 2 {
+		t.Fatalf("lost composition: %+v", p)
+	}
+	legacy := map[string]any{"name": "Assortment", "price": 100, "package_id": f.PersonalPackage.ID, "cost_mode": "manual", "components": nil}
+	r = runWorkspaceJSONRequest(f.User.ID, f.PersonalWorkspace.ID, UpdateProduct, "PUT", "/products/:id", fmt.Sprintf("/products/%d", p.ID), legacy)
+	if r.Code != 409 {
+		t.Fatalf("legacy erase: %d %s", r.Code, r.Body)
+	}
+}
+
+func TestLegacyModeChangeAndStaleVersionAreRejected(t *testing.T) {
+	f := setupCostingBusiness(t)
+	enableCalculatedProduct(t, f)
+	target := fmt.Sprintf("/products/%d", f.PersonalProduct.ID)
+	body := map[string]any{"name": f.PersonalProduct.Name, "price": f.PersonalProduct.Price, "package_id": f.PersonalPackage.ID, "cost_mode": "manual"}
+	r := runWorkspaceJSONRequest(f.User.ID, f.PersonalWorkspace.ID, UpdateProduct, "PUT", "/products/:id", target, body)
+	if r.Code != 409 {
+		t.Fatalf("legacy transition: %d %s", r.Code, r.Body)
+	}
+	var p models.Product
+	if err := database.DB.First(&p, f.PersonalProduct.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if p.CostRecipeID == nil || *p.CostRecipeID != f.PersonalRecipe.ID || p.CostMode != "recipe" {
+		t.Fatalf("legacy request changed config: %+v", p)
+	}
+	body["product_type"] = "standard"
+	r = runWorkspaceJSONRequest(f.User.ID, f.PersonalWorkspace.ID, UpdateProduct, "PUT", "/products/:id", target, body)
+	if r.Code != 400 {
+		t.Fatalf("missing version: %d %s", r.Code, r.Body)
+	}
+	body["recipe_id"] = f.PersonalRecipe.ID
+	body["configuration_version"] = p.ConfigurationVersion + 1
+	body["cost"] = 42
+	r = runWorkspaceJSONRequest(f.User.ID, f.PersonalWorkspace.ID, UpdateProduct, "PUT", "/products/:id", target, body)
+	if r.Code != 409 {
+		t.Fatalf("stale version: %d %s", r.Code, r.Body)
+	}
+	body["configuration_version"] = p.ConfigurationVersion
+	r = runWorkspaceJSONRequest(f.User.ID, f.PersonalWorkspace.ID, UpdateProduct, "PUT", "/products/:id", target, body)
+	if r.Code != 200 {
+		t.Fatalf("current transition: %d %s", r.Code, r.Body)
+	}
+	if err := database.DB.First(&p, f.PersonalProduct.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if p.CostMode != "manual" || p.CostRecipeID == nil || *p.CostRecipeID != f.PersonalRecipe.ID {
+		t.Fatalf("new request lost recipe: %+v", p)
+	}
+}
+
+func TestCommittedProductReadFailureDoesNotInviteResave(t *testing.T) {
+	f := setupCostingBusiness(t)
+	previous := readSavedCostedProduct
+	readSavedCostedProduct = func(uint, uint) (models.Product, error) { return models.Product{}, errors.New("injected read failure") }
+	defer func() { readSavedCostedProduct = previous }()
+	body := map[string]any{"name": "Committed", "price": 100, "package_id": f.PersonalPackage.ID, "product_type": "standard", "cost_mode": "manual", "cost": 0}
+	r := runWorkspaceJSONRequest(f.User.ID, f.PersonalWorkspace.ID, CreateProduct, "POST", "/products", "/products", body)
+	if r.Code != 201 {
+		t.Fatalf("response: %d %s", r.Code, r.Body)
+	}
+	var result map[string]any
+	if err := json.Unmarshal(r.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result["refresh_required"] != true || result["cost_estimate"] != nil || result["id"] == nil {
+		t.Fatalf("response: %+v", result)
+	}
+	var count int64
+	if err := database.DB.Model(&models.Product{}).Where("name = ?", "Committed").Count(&count).Error; err != nil || count != 1 {
+		t.Fatalf("commit: %d %v", count, err)
+	}
+}
+
+func TestProductTypesFeatureGateBlocksWritesButNotReads(t *testing.T) {
+	f := setupCostingBusiness(t)
+	t.Setenv("PRODUCT_TYPES_V1_ENABLED", "false")
+	body := map[string]any{"name": "Disabled", "price": 100, "package_id": f.PersonalPackage.ID, "product_type": "standard", "cost_mode": "manual", "cost": 1}
+	r := runWorkspaceJSONRequest(f.User.ID, f.PersonalWorkspace.ID, CreateProduct, "POST", "/products", "/products", body)
+	if r.Code != 409 {
+		t.Fatalf("write: %d %s", r.Code, r.Body)
+	}
+	r = runWorkspaceJSONRequest(f.User.ID, f.PersonalWorkspace.ID, GetProducts, "GET", "/products", "/products", nil)
+	if r.Code != 200 {
+		t.Fatalf("read: %d %s", r.Code, r.Body)
+	}
+	if workspaceCapabilities().ProductTypesV1 {
+		t.Fatal("disabled capability reported enabled")
+	}
+}
+
+func TestLegacySerializerNoopAndEraseProtection(t *testing.T) {
+	f := setupCostingBusiness(t)
+	enableCalculatedProduct(t, f)
+	source := models.Product{Name: "second source", Price: 10, CostMode: "manual", ProductType: "standard", CostRecipeID: &f.PersonalRecipe.ID, PackageID: f.PersonalPackage.ID, WorkspaceID: &f.PersonalWorkspace.ID, UserID: f.User.ID}
+	if err := database.DB.Create(&source).Error; err != nil {
+		t.Fatal(err)
+	}
+	body := map[string]any{"name": "mix", "price": 100, "package_id": f.PersonalPackage.ID, "product_type": "assortment", "composition_basis": "products", "cost_mode": "assortment", "assortment_components": []any{map[string]any{"component_product_id": f.PersonalProduct.ID, "quantity_g": 50}, map[string]any{"component_product_id": source.ID, "quantity_g": 50}}}
+	r := runWorkspaceJSONRequest(f.User.ID, f.PersonalWorkspace.ID, CreateProduct, "POST", "/products", "/products", body)
+	if r.Code != 201 {
+		t.Fatalf("create: %d %s", r.Code, r.Body)
+	}
+	var p models.Product
+	if err := json.Unmarshal(r.Body.Bytes(), &p); err != nil {
+		t.Fatal(err)
+	}
+	target := fmt.Sprintf("/products/%d", p.ID)
+	old := map[string]any{"name": "renamed", "price": 100, "package_id": f.PersonalPackage.ID, "cost_mode": "assortment", "cost": 0, "cost_recipe_id": nil, "components": []any{}, "recipe_ids": []any{}}
+	r = runWorkspaceJSONRequest(f.User.ID, f.PersonalWorkspace.ID, UpdateProduct, "PUT", "/products/:id", target, old)
+	if r.Code != 200 {
+		t.Fatalf("old serializer no-op: %d %s", r.Code, r.Body)
+	}
+	var rows int64
+	if err := database.DB.Model(&models.ProductAssortmentComponent{}).Where("product_id = ?", p.ID).Count(&rows).Error; err != nil || rows != 2 {
+		t.Fatalf("composition lost: %d %v", rows, err)
+	}
+	if err := database.DB.Create(&models.ProductOption{ProductID: p.ID, RecipeID: f.PersonalRecipe.ID, UserID: f.User.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	old["recipe_ids"] = []uint{f.PersonalRecipe.ID}
+	r = runWorkspaceJSONRequest(f.User.ID, f.PersonalWorkspace.ID, UpdateProduct, "PUT", "/products/:id", target, old)
+	if r.Code != 200 {
+		t.Fatalf("same options: %d %s", r.Code, r.Body)
+	}
+	old["recipe_ids"] = []any{}
+	r = runWorkspaceJSONRequest(f.User.ID, f.PersonalWorkspace.ID, UpdateProduct, "PUT", "/products/:id", target, old)
+	if r.Code != 409 {
+		t.Fatalf("option erase: %d %s", r.Code, r.Body)
+	}
+	standard := models.Product{Name: "manual retained", Price: 10, CostMode: "manual", ProductType: "standard", CostRecipeID: &f.PersonalRecipe.ID, PackageID: f.PersonalPackage.ID, WorkspaceID: &f.PersonalWorkspace.ID, UserID: f.User.ID}
+	if err := database.DB.Create(&standard).Error; err != nil {
+		t.Fatal(err)
+	}
+	erase := map[string]any{"name": "manual retained", "price": 10, "package_id": f.PersonalPackage.ID, "cost_mode": "manual", "cost_recipe_id": nil}
+	r = runWorkspaceJSONRequest(f.User.ID, f.PersonalWorkspace.ID, UpdateProduct, "PUT", "/products/:id", fmt.Sprintf("/products/%d", standard.ID), erase)
+	if r.Code != 409 {
+		t.Fatalf("retained recipe erase: %d %s", r.Code, r.Body)
+	}
+}
+
+func TestReferencedSourceCannotBecomeAssortmentViaLegacyOrCurrentClient(t *testing.T) {
+	f := setupCostingBusiness(t)
+	enableCalculatedProduct(t, f)
+	secondRecipe := models.Recipe{Name: "Second local recipe", UserID: f.User.ID, WorkspaceID: &f.PersonalWorkspace.ID}
+	if err := database.DB.Create(&secondRecipe).Error; err != nil {
+		t.Fatal(err)
+	}
+	secondSource := models.Product{Name: "Second source", Price: 10, ProductType: "standard", CostMode: "manual", CostRecipeID: &f.PersonalRecipe.ID, PackageID: f.PersonalPackage.ID, WorkspaceID: &f.PersonalWorkspace.ID, UserID: f.User.ID}
+	if err := database.DB.Create(&secondSource).Error; err != nil {
+		t.Fatal(err)
+	}
+	basis := "products"
+	parent := models.Product{Name: "Parent", Price: 100, ProductType: "assortment", CompositionBasis: &basis, CostMode: "assortment", PackageID: f.PersonalPackage.ID, WorkspaceID: &f.PersonalWorkspace.ID, UserID: f.User.ID}
+	if err := database.DB.Create(&parent).Error; err != nil {
+		t.Fatal(err)
+	}
+	for i, id := range []uint{f.PersonalProduct.ID, secondSource.ID} {
+		if err := database.DB.Create(&models.ProductAssortmentComponent{WorkspaceID: f.PersonalWorkspace.ID, ProductID: parent.ID, ComponentProductID: id, QuantityG: "50", Position: i}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	getParent := func() models.Product {
+		t.Helper()
+		r := runWorkspaceJSONRequest(f.User.ID, f.PersonalWorkspace.ID, GetProductByID, "GET", "/products/:id", fmt.Sprintf("/products/%d", parent.ID), nil)
+		if r.Code != 200 {
+			t.Fatalf("parent read: %d %s", r.Code, r.Body)
+		}
+		var p models.Product
+		if err := json.Unmarshal(r.Body.Bytes(), &p); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	before := getParent()
+	if before.CostEstimate == nil || before.CostEstimate.TotalCost == nil {
+		t.Fatal("expected complete parent estimate")
+	}
+	amount := *before.CostEstimate.TotalCost
+	var sourceBefore models.Product
+	if err := database.DB.First(&sourceBefore, f.PersonalProduct.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	target := fmt.Sprintf("/products/%d", sourceBefore.ID)
+	legacy := map[string]any{"name": sourceBefore.Name, "price": sourceBefore.Price, "package_id": f.PersonalPackage.ID, "cost_mode": "assortment", "components": []any{map[string]any{"recipe_id": f.PersonalRecipe.ID, "quantity_g": 50}, map[string]any{"recipe_id": secondRecipe.ID, "quantity_g": 50}}}
+	r := runWorkspaceJSONRequest(f.User.ID, f.PersonalWorkspace.ID, UpdateProduct, "PUT", "/products/:id", target, legacy)
+	if r.Code != 409 {
+		t.Fatalf("legacy transition: %d %s", r.Code, r.Body)
+	}
+	modern := map[string]any{"name": sourceBefore.Name, "price": sourceBefore.Price, "package_id": f.PersonalPackage.ID, "product_type": "assortment", "composition_basis": "products", "configuration_version": sourceBefore.ConfigurationVersion, "cost_mode": "assortment", "assortment_components": []any{map[string]any{"component_product_id": sourceBefore.ID, "quantity_g": 50}, map[string]any{"component_product_id": secondSource.ID, "quantity_g": 50}}}
+	r = runWorkspaceJSONRequest(f.User.ID, f.PersonalWorkspace.ID, UpdateProduct, "PUT", "/products/:id", target, modern)
+	if r.Code != 409 {
+		t.Fatalf("current transition: %d %s", r.Code, r.Body)
+	}
+	var after models.Product
+	if err := database.DB.First(&after, sourceBefore.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if after.ProductType != sourceBefore.ProductType || after.CostMode != sourceBefore.CostMode || after.ConfigurationVersion != sourceBefore.ConfigurationVersion {
+		t.Fatalf("source changed: before=%+v after=%+v", sourceBefore, after)
+	}
+	final := getParent()
+	if final.CostEstimate == nil || final.CostEstimate.TotalCost == nil || *final.CostEstimate.TotalCost != amount {
+		t.Fatalf("parent estimate changed: %+v", final.CostEstimate)
+	}
+}
+
+func TestLegacyCompositionRequiresProductConversion(t *testing.T) {
+	f := setupCostingBusiness(t)
+	enableCalculatedProduct(t, f)
+	recipeB := models.Recipe{Name: "Second local", UserID: f.User.ID, WorkspaceID: &f.PersonalWorkspace.ID}
+	if err := database.DB.Create(&recipeB).Error; err != nil {
+		t.Fatal(err)
+	}
+	sourceB := models.Product{Name: "Second source", Price: 10, ProductType: "standard", CostMode: "manual", CostRecipeID: &recipeB.ID, PackageID: f.PersonalPackage.ID, WorkspaceID: &f.PersonalWorkspace.ID, UserID: f.User.ID}
+	if err := database.DB.Create(&sourceB).Error; err != nil {
+		t.Fatal(err)
+	}
+	basis := "legacy_recipes"
+	parent := models.Product{Name: "Legacy", Price: 100, ProductType: "assortment", CompositionBasis: &basis, CostMode: "assortment", PackageID: f.PersonalPackage.ID, WorkspaceID: &f.PersonalWorkspace.ID, UserID: f.User.ID}
+	if err := database.DB.Create(&parent).Error; err != nil {
+		t.Fatal(err)
+	}
+	for i, id := range []uint{f.PersonalRecipe.ID, recipeB.ID} {
+		if err := database.DB.Create(&models.ProductCostComponent{WorkspaceID: f.PersonalWorkspace.ID, ProductID: parent.ID, RecipeID: id, QuantityG: "50", Position: i}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	target := fmt.Sprintf("/products/%d", parent.ID)
+	body := map[string]any{"name": "Legacy", "price": 100, "package_id": f.PersonalPackage.ID, "product_type": "assortment", "composition_basis": "legacy_recipes", "configuration_version": parent.ConfigurationVersion, "cost_mode": "assortment", "components": []any{map[string]any{"recipe_id": f.PersonalRecipe.ID, "quantity_g": 60}, map[string]any{"recipe_id": recipeB.ID, "quantity_g": 40}}}
+	r := runWorkspaceJSONRequest(f.User.ID, f.PersonalWorkspace.ID, UpdateProduct, "PUT", "/products/:id", target, body)
+	if r.Code != 409 {
+		t.Fatalf("changed composition: %d %s", r.Code, r.Body)
+	}
+	var errBody map[string]any
+	if err := json.Unmarshal(r.Body.Bytes(), &errBody); err != nil {
+		t.Fatal(err)
+	}
+	if errBody["code"] != "legacy_composition_requires_conversion" {
+		t.Fatalf("unexpected conflict: %s", r.Body)
+	}
+	body["components"] = nil
+	r = runWorkspaceJSONRequest(f.User.ID, f.PersonalWorkspace.ID, UpdateProduct, "PUT", "/products/:id", target, body)
+	if r.Code != 409 {
+		t.Fatalf("null erase: %d %s", r.Code, r.Body)
+	}
+	body["components"] = []any{map[string]any{"recipe_id": f.PersonalRecipe.ID, "quantity_g": 50.000}, map[string]any{"recipe_id": recipeB.ID, "quantity_g": 50}}
+	r = runWorkspaceJSONRequest(f.User.ID, f.PersonalWorkspace.ID, UpdateProduct, "PUT", "/products/:id", target, body)
+	if r.Code != 200 {
+		t.Fatalf("identical composition: %d %s", r.Code, r.Body)
+	}
+	var updated models.Product
+	if err := json.Unmarshal(r.Body.Bytes(), &updated); err != nil {
+		t.Fatal(err)
+	}
+	body["configuration_version"] = updated.ConfigurationVersion
+	body["composition_basis"] = "products"
+	body["components"] = []any{}
+	body["assortment_components"] = []any{map[string]any{"component_product_id": f.PersonalProduct.ID, "quantity_g": 50}, map[string]any{"component_product_id": sourceB.ID, "quantity_g": 50}}
+	r = runWorkspaceJSONRequest(f.User.ID, f.PersonalWorkspace.ID, UpdateProduct, "PUT", "/products/:id", target, body)
+	if r.Code != 200 {
+		t.Fatalf("explicit conversion: %d %s", r.Code, r.Body)
+	}
+	var converted models.Product
+	if err := json.Unmarshal(r.Body.Bytes(), &converted); err != nil {
+		t.Fatal(err)
+	}
+	if converted.CompositionBasis == nil || *converted.CompositionBasis != "products" || len(converted.AssortmentComponents) != 2 || len(converted.CostComponents) != 0 {
+		t.Fatalf("conversion result: %+v", converted)
+	}
+	var count int64
+	if err := database.DB.Model(&models.ProductCostComponent{}).Where("product_id = ?", parent.ID).Count(&count).Error; err != nil || count != 0 {
+		t.Fatalf("legacy rows not retired: %d %v", count, err)
 	}
 }

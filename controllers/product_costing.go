@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -66,7 +67,35 @@ func PreviewProductCost(c *gin.Context) {
 	if input.CostMode == "" {
 		input.CostMode = models.CostModeManual
 	}
-	product := models.Product{CostMode: input.CostMode, CostRecipeID: input.CostRecipeID, Cost: input.Cost, PackageID: input.PackageID}
+	var recipe, costRecipe *uint
+	if input.RecipeID != nil {
+		if err := json.Unmarshal(input.RecipeID, &recipe); err != nil {
+			writeCostingError(c, badCostInput("Invalid recipe_id"), "Invalid preview")
+			return
+		}
+	}
+	if input.CostRecipeID != nil {
+		if err := json.Unmarshal(input.CostRecipeID, &costRecipe); err != nil {
+			writeCostingError(c, badCostInput("Invalid cost_recipe_id"), "Invalid preview")
+			return
+		}
+	}
+	if input.RecipeID != nil && input.CostRecipeID != nil && ((recipe == nil) != (costRecipe == nil) || (recipe != nil && *recipe != *costRecipe)) {
+		writeCostingError(c, badCostInput("recipe_id and cost_recipe_id conflict"), "Invalid preview")
+		return
+	}
+	if input.RecipeID != nil {
+		costRecipe = recipe
+	}
+
+	product := models.Product{CostMode: input.CostMode, CostRecipeID: costRecipe, Cost: input.Cost, PackageID: input.PackageID, AssortmentComponents: input.AssortmentComponents, CompositionBasis: input.CompositionBasis}
+	if input.ProductType != nil {
+		product.ProductType = *input.ProductType
+		if product.ProductType == "assortment" && product.CompositionBasis == nil {
+			basis := "products"
+			product.CompositionBasis = &basis
+		}
+	}
 	for i, row := range input.Components {
 		product.CostComponents = append(product.CostComponents, models.ProductCostComponent{RecipeID: row.RecipeID, QuantityG: row.QuantityG, WorkspaceID: workspaceID, Position: i})
 	}
