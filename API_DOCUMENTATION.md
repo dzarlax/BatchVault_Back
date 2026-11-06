@@ -1172,3 +1172,66 @@ The API validates all input data:
 7. **Input Validation**: All inputs are validated for data integrity (positive quantities, non-negative prices, required fields)
 8. **JWT Expiration**: Tokens expire after 24 hours for enhanced security
 9. **Index Optimization**: Database indexes are automatically created for optimal query performance 
+
+## Product cost calculation
+
+All costing reads and writes use the resolved workspace. Existing products stay in `manual` mode; legacy `cost` values and saved order costs are preserved. The new metadata is additive. Updated clients must use `cost_estimate` for calculated products and must never treat a legacy `cost` value as a fallback for an incomplete calculation.
+
+### Recipe and package inputs
+
+- `POST /api/recipes` accepts optional `planned_yield_g`; `PATCH /api/recipes/{id}` updates only this field. It is the finished content weight for the recipe's listed ingredient quantities, after processing. A positive decimal with at most three fractional digits is required; `null` clears it, omission preserves it on PATCH.
+- `POST /api/packages` accepts optional `net_weight_g` and `unit_cost`; `PATCH /api/packages/{id}` changes these fields and/or `name`. Net weight is positive with at most three fractional digits. Unit cost is nonnegative with at most two fractional digits. `null` means unknown; an explicit zero unit cost means free packaging. Names are never parsed for weight or cost.
+- First-time initialization of a used package's unknown weight requires `confirm_weight_initialization: true` after reviewing linked products. An existing assortment that does not match the proposed weight returns 409. Once a used package has a weight, create another format to change it. Unused formats remain editable. Changing unit cost affects current estimates, never saved order costs.
+- Ingredient price creation requires an explicit non-null `price`, including zero, and a finite positive purchased `quantity`. Latest prices are selected within the workspace by date, creation timestamp and ID, descending.
+
+### Product configuration and preview
+
+`POST /api/products` and `PUT /api/products/{id}` accept:
+
+```json
+{
+  "name": "Five flavours, 250 g",
+  "price": 1200,
+  "package_id": 12,
+  "cost_mode": "assortment",
+  "cost_recipe_id": null,
+  "components": [
+    {"recipe_id": 1, "quantity_g": 50},
+    {"recipe_id": 2, "quantity_g": 50},
+    {"recipe_id": 3, "quantity_g": 50},
+    {"recipe_id": 4, "quantity_g": 50},
+    {"recipe_id": 5, "quantity_g": 50}
+  ]
+}
+```
+
+`manual` uses the complete legacy `cost`, with no additional packaging. `recipe` requires exactly one `cost_recipe_id` and no components. `assortment` requires at least two distinct component recipes and positive gram amounts, with no `cost_recipe_id`. Component grams must equal the known package net weight exactly. Existing `recipe_ids` links remain independent and never select a costing mode automatically. Omitted costing configuration is preserved on update. Entering `cost` on a calculated product returns 409 unless the request explicitly switches to `manual`.
+
+`POST /api/products/cost-preview` accepts the same costing fields plus `package_id` (and `cost` for manual preview), without a name/price. It returns a `CostEstimate` and writes no rows or notifications. Malformed composition or foreign references return 400. Structurally valid configurations with missing yield/price/package metadata can be saved and return an incomplete estimate.
+
+The ordinary formula is `ingredient batch cost / planned_yield_g * package net_weight_g + package unit_cost`. Assortments sum each recipe's per-gram rate times its assigned grams, then add exactly one final package. There are no inner packages, alternative recipes or nested sets. Recognized `packaging` ingredients in a costing recipe make it incomplete so packaging is not charged twice. They remain in the legacy ingredient subtotal.
+
+Calculations use base-ten rational arithmetic, preserve unrounded component amounts internally and round the final sale-unit total once, to two fractional digits, half away from zero. New weight columns are `numeric(14,3)`, packaging cost is `numeric(14,2)`; calculated totals are bounded to the latter monetary range. Other legacy money columns are unchanged.
+
+Product list/detail responses include `cost_estimate` with `status`, `source`, nullable `total_cost`, `content_cost`, `packaging_cost`, recipe components, input price references, issues and a calculation timestamp. `complete` with `total_cost: 0` is valid. `incomplete` has `total_cost: null`; clients show issues and suppress profit/margin. Recipe responses also include planned yield, per-gram cost and ingredient `cost_status`; legacy `total_cost` remains a potentially partial ingredient subtotal. These estimates cover ingredients and packaging only.
+
+### Orders and historical costs
+
+For every new/replaced calculated order item the server recomputes the current estimate in the write transaction. Updated clients submit their displayed two-decimal `cost_price` as an assertion. A different rounded amount or incomplete calculation returns 409 and rolls back the entire write. Clients refresh and explicitly review the new amount. Legacy omission accepts the current cost at save time. Manual items permit an explicit nonnegative cost override, including zero.
+
+The server persists `cost_price` and a versioned JSON `cost_snapshot` containing source, amount, estimate/input references and timestamp. Clients send stable order item `id` values on PUT. Unchanged saved rows retain their cost and snapshot across quantity/status/price edits, product source changes and product deletion. Calculated historical cost cannot be overridden. Legacy rows with no snapshot remain historical manual rows; explicit edits create manual provenance. Unique ID-less legacy matches remain supported, but ambiguous calculated matches return 409. Unknown snapshot versions/sources are rejected on edit.
+
+POST returns the saved order. PUT retains its success-message response; clients then GET `/api/orders/{id}` to obtain authoritative saved rows/snapshots. After a successful PUT, a failed GET is recovered by retrying only the read, never the write. Historical order totals and profit always use saved item costs, never live estimates.
+
+### Local verification
+
+Focused costing suites run with `go test ./controllers ./services`. The PostgreSQL migration/JSONB/decimal test is opt-in with `COSTING_TEST_DATABASE_URL` and accepts only a local database named `costing_test`; it uses and drops its own unique schema. No production data is required. Schema changes are additive and migration can run repeatedly. Rollback requires retaining these fields and snapshots; do not drop them or operate calculated products through older clients that ignore `cost_mode`.
+
+
+### Package concurrency and costing regression tests
+
+Package PATCH uses PostgreSQL READ COMMITTED while holding the same package row lock acquired by product writers. Its usage/composition checks run after acquiring that lock and therefore see newly committed product links. Product/order costing and previews retain repeatable-read graph consistency. An established weight change, unreviewed initialization or mismatching assortment must return 409 even when a product is committed while PATCH waits.
+
+The opt-in controller test `TestPackageMutationObservesProductCommittedWhileWaiting` uses actual concurrent handlers, an insert barrier and an observed PostgreSQL lock wait. Set `COSTING_TEST_DATABASE_URL` to an isolated local database named `costing_test` and run `go test ./controllers ./database -run 'PackageMutation|ProductCostingPostgres' -count=1`. The fixtures create and drop unique schemas; no production database is accepted.
+
+Web `npm run test:costing` checks the shared network quote-refresh operation. `npm run test:costing:browser` is opt-in against synthetic localhost fixtures and verifies both order surfaces through 409, refresh and save. iOS `OrderCostReviewTests` covers quote fetches, historical selection restoration, price retention and late-response rejection. Android `OrdersViewModelRecoveryTest` covers per-order pending reads and editor navigation after successful PUT/failed GET.

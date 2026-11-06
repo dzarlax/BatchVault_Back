@@ -40,6 +40,7 @@ func SetupRoutes(router *gin.Engine) {
 		protectedRoutes.GET("/recipes", controllers.GetRecipes)
 		protectedRoutes.GET("/recipes/:id", controllers.GetRecipe)
 		protectedRoutes.POST("/recipes", controllers.CreateRecipe)
+		protectedRoutes.PATCH("/recipes/:id", controllers.UpdateRecipeYield)
 		protectedRoutes.DELETE("/recipes/:id", controllers.DeleteRecipe)
 
 		// Ingredient routes
@@ -60,6 +61,7 @@ func SetupRoutes(router *gin.Engine) {
 		protectedRoutes.GET("/products", controllers.GetProducts)
 		protectedRoutes.GET("/products/:id", controllers.GetProductByID)
 		protectedRoutes.POST("/products", controllers.CreateProduct)
+		protectedRoutes.POST("/products/cost-preview", controllers.PreviewProductCost)
 		protectedRoutes.PUT("/products/:id", controllers.UpdateProduct)
 		protectedRoutes.DELETE("/products/:id", controllers.DeleteProduct)
 
@@ -89,6 +91,7 @@ func SetupRoutes(router *gin.Engine) {
 		// Package routes
 		protectedRoutes.GET("/packages", controllers.GetPackages)
 		protectedRoutes.POST("/packages", controllers.AddPackage)
+		protectedRoutes.PATCH("/packages/:id", controllers.UpdatePackage)
 
 		// Change password route
 		protectedRoutes.POST("/profile/change-password", controllers.ChangePassword)

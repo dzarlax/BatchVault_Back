@@ -1,6 +1,8 @@
 package models
 
 import (
+	"encoding/json"
+	"fmt"
 	"time"
 
 	"gorm.io/gorm"
@@ -9,10 +11,24 @@ import (
 // PriceCreateDTO represents data for creating a new price (without nested Ingredient)
 type PriceCreateDTO struct {
 	IngredientID uint      `json:"ingredient_id" binding:"required"`
-	Price        float64   `json:"price" binding:"required,min=0"`
+	Price        float64   `json:"price" binding:"min=0"`
 	Quantity     float64   `json:"quantity" binding:"required,gt=0"`
 	Unit         string    `json:"unit"`
 	Date         time.Time `json:"date"`
+}
+
+// UnmarshalJSON requires an explicit price while permitting a genuinely free ingredient.
+func (p *PriceCreateDTO) UnmarshalJSON(data []byte) error {
+	type plain PriceCreateDTO
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	price, exists := fields["price"]
+	if !exists || string(price) == "null" {
+		return fmt.Errorf("price is required and cannot be null")
+	}
+	return json.Unmarshal(data, (*plain)(p))
 }
 
 // Price represents ingredient price model

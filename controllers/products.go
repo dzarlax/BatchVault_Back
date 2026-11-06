@@ -1,382 +1,298 @@
 package controllers
 
 import (
-	"fmt"
+	"encoding/json"
+	"errors"
+	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+	"math"
 	"mobile-backend-go/database"
 	"mobile-backend-go/models"
+	"mobile-backend-go/services"
 	"net/http"
 	"strconv"
-
-	"github.com/gin-gonic/gin"
 )
 
-func validateRecipeWorkspace(recipeIDs []uint, workspaceID uint) error {
-	if len(recipeIDs) == 0 {
+func validateRecipeWorkspace(db *gorm.DB, recipeIDs []uint, workspaceID uint) error {
+	unique := map[uint]bool{}
+	for _, id := range recipeIDs {
+		if id == 0 {
+			return badCostInput("recipe_ids cannot contain 0")
+		}
+		unique[id] = true
+	}
+	if len(unique) == 0 {
 		return nil
 	}
-
-	uniqueRecipeIDs := make(map[uint]struct{}, len(recipeIDs))
-	for _, recipeID := range recipeIDs {
-		if recipeID == 0 {
-			return fmt.Errorf("recipe_ids cannot contain 0")
-		}
-		uniqueRecipeIDs[recipeID] = struct{}{}
+	ids := []uint{}
+	for id := range unique {
+		ids = append(ids, id)
 	}
-
-	ids := make([]uint, 0, len(uniqueRecipeIDs))
-	for recipeID := range uniqueRecipeIDs {
-		ids = append(ids, recipeID)
-	}
-
 	var count int64
-	if err := database.DB.Model(&models.Recipe{}).
-		Where("workspace_id = ? AND id IN ?", workspaceID, ids).
-		Count(&count).Error; err != nil {
+	if err := db.Model(&models.Recipe{}).Where("workspace_id = ? AND id IN ?", workspaceID, ids).Count(&count).Error; err != nil {
 		return err
 	}
-	if count != int64(len(ids)) {
-		return fmt.Errorf("invalid recipe ID or recipe does not belong to workspace")
+	if int(count) != len(ids) {
+		return badCostInput("Recipe does not belong to this workspace")
 	}
-
 	return nil
 }
 
-// GetProducts returns a list of products
+// GetProducts returns the workspace catalog with authoritative cost estimates.
 // @Summary Get list of products
-// @Description Get all products available
 // @Tags Products
 // @Security BearerAuth
-// @Produce  json
+// @Produce json
 // @Success 200 {array} models.Product
-// @Failure 401 {object} map[string]string
 // @Router /api/products [get]
 func GetProducts(c *gin.Context) {
-	var products []models.Product
 	workspaceID := c.MustGet("workspaceID").(uint)
-
-	if err := database.DB.
-		Preload("Options").
-		Preload("Package").
-		Where("workspace_id = ?", workspaceID).
-		Find(&products).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch products"})
+	products := []models.Product{}
+	err := database.CostingTransaction(database.DB, true, func(tx *gorm.DB) error {
+		if err := tx.Preload("Options").Preload("Package", "workspace_id = ?", workspaceID).Where("workspace_id = ?", workspaceID).Find(&products).Error; err != nil {
+			return err
+		}
+		return services.NewCosting(tx, workspaceID).AttachProducts(products)
+	})
+	if err != nil {
+		writeCostingError(c, err, "Failed to fetch products")
 		return
 	}
-
 	c.JSON(http.StatusOK, products)
 }
 
-// GetProductByID returns a product by ID
+// GetProductByID returns a product and its current cost breakdown.
 // @Summary Get product by ID
-// @Description Get a specific product by its ID
 // @Tags Products
 // @Security BearerAuth
-// @Produce  json
+// @Produce json
 // @Param id path int true "Product ID"
 // @Success 200 {object} models.Product
-// @Failure 400 {object} map[string]string
-// @Failure 401 {object} map[string]string
-// @Failure 404 {object} map[string]string
 // @Router /api/products/{id} [get]
 func GetProductByID(c *gin.Context) {
-	// Get product ID from URL parameters
-	productID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := costingID(c)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid product ID"})
+		c.JSON(400, gin.H{"error": "Invalid product ID"})
 		return
 	}
-
 	workspaceID := c.MustGet("workspaceID").(uint)
-
 	var product models.Product
-
-	// Search for product with preload of options and package
-	if err := database.DB.
-		Preload("Options").
-		Preload("Package").
-		Where("id = ? AND workspace_id = ?", productID, workspaceID).
-		First(&product).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Product not found"})
+	err = database.CostingTransaction(database.DB, true, func(tx *gorm.DB) error {
+		if err := tx.Preload("Options").Preload("Package", "workspace_id = ?", workspaceID).Where("id = ? AND workspace_id = ?", id, workspaceID).First(&product).Error; err != nil {
+			return err
+		}
+		rows := []models.Product{product}
+		if err := services.NewCosting(tx, workspaceID).AttachProducts(rows); err != nil {
+			return err
+		}
+		product = rows[0]
+		return nil
+	})
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		c.JSON(404, gin.H{"error": "Product not found"})
 		return
 	}
-
-	c.JSON(http.StatusOK, product)
+	if err != nil {
+		writeCostingError(c, err, "Failed to fetch product")
+		return
+	}
+	c.JSON(200, product)
 }
 
-// CreateProduct creates a new product
-// @Summary Create a new product
-// @Description Create a new product by providing necessary details, including product options
+type ProductWriteRequest struct {
+	Name         string          `json:"name" binding:"required,min=1"`
+	Description  string          `json:"description"`
+	Price        float64         `json:"price" binding:"required,min=0"`
+	Cost         *float64        `json:"cost" binding:"omitempty,min=0"`
+	Image        *string         `json:"image"`
+	RecipeIDs    *[]uint         `json:"recipe_ids"`
+	PackageID    uint            `json:"package_id" binding:"required"`
+	CostMode     *string         `json:"cost_mode"`
+	CostRecipeID json.RawMessage `json:"cost_recipe_id" swaggertype:"integer"`
+	Components   json.RawMessage `json:"components" swaggertype:"object"`
+}
+
+// productWriteDocumentation describes the JSON shape; the handler additionally tracks omitted/null fields.
+type productWriteDocumentation struct {
+	Name         string                             `json:"name" binding:"required"`
+	Description  string                             `json:"description"`
+	Price        float64                            `json:"price" binding:"required"`
+	Cost         *float64                           `json:"cost"`
+	Image        *string                            `json:"image"`
+	RecipeIDs    []uint                             `json:"recipe_ids"`
+	PackageID    uint                               `json:"package_id" binding:"required"`
+	CostMode     *string                            `json:"cost_mode" enums:"manual,recipe,assortment"`
+	CostRecipeID *uint                              `json:"cost_recipe_id"`
+	Components   []models.ProductCostComponentInput `json:"components"`
+}
+
+// CreateProduct creates a manual, recipe-based or fixed-assortment product.
+// @Summary Create a product
 // @Tags Products
 // @Security BearerAuth
-// @Accept  json
-// @Produce  json
-// @Param request body models.ProductRequest true "Product data and options"
+// @Accept json
+// @Produce json
+// @Param request body productWriteDocumentation true "Product configuration"
 // @Success 201 {object} models.Product
 // @Failure 400 {object} map[string]string
-// @Failure 401 {object} map[string]string
+// @Failure 409 {object} map[string]string
 // @Router /api/products [post]
-func CreateProduct(c *gin.Context) {
-	var requestData struct {
-		Name        string  `json:"name" binding:"required,min=1"`
-		Description string  `json:"description"`
-		Price       float64 `json:"price" binding:"required,min=0"`
-		Cost        float64 `json:"cost" binding:"min=0"`
-		Image       *string `json:"image"`
-		RecipeIDs   []uint  `json:"recipe_ids"`
-		PackageID   uint    `json:"package_id" binding:"required"`
-	}
+func CreateProduct(c *gin.Context) { saveCostedProduct(c, false) }
 
-	// Read data from request
-	if err := c.ShouldBindJSON(&requestData); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	// Additional business rules validation
-	if requestData.Name == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "name is required"})
-		return
-	}
-	if requestData.Price < 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "price cannot be negative"})
-		return
-	}
-	if requestData.Cost < 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "cost cannot be negative"})
-		return
-	}
-
-	// Get userID from context
-	userID, exists := c.Get("userID")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		return
-	}
-	workspaceID := c.MustGet("workspaceID").(uint)
-
-	// Check package existence and ownership
-	var existingPackage models.Package
-	if err := database.DB.Where("id = ? AND workspace_id = ?", requestData.PackageID, workspaceID).First(&existingPackage).Error; err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid Package ID or package does not belong to workspace"})
-		return
-	}
-	if err := validateRecipeWorkspace(requestData.RecipeIDs, workspaceID); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	// Create new product
-	product := models.Product{
-		Name:        requestData.Name,
-		Description: requestData.Description,
-		Price:       requestData.Price,
-		Cost:        requestData.Cost,
-		Image:       "",
-		UserID:      userID.(uint),
-		WorkspaceID: &workspaceID,
-		PackageID:   requestData.PackageID,
-	}
-
-	// Set Image field only if not nil
-	if requestData.Image != nil {
-		product.Image = *requestData.Image
-	}
-
-	// Start transaction
-	tx := database.DB.Begin()
-
-	// Save product
-	if err := tx.Create(&product).Error; err != nil {
-		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create product"})
-		return
-	}
-
-	// Creation of options for product recipes
-	var options []models.ProductOption
-	for _, recipeID := range requestData.RecipeIDs {
-		options = append(options, models.ProductOption{
-			ProductID: product.ID,
-			RecipeID:  recipeID,
-			UserID:    userID.(uint),
-		})
-	}
-
-	// Save options
-	if len(options) > 0 {
-		if err := tx.Create(&options).Error; err != nil {
-			tx.Rollback()
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create product options"})
-			return
-		}
-	}
-
-	// Commit transaction
-	if err := tx.Commit().Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to commit transaction"})
-		return
-	}
-
-	// Load full product information with package and options
-	var createdProduct models.Product
-	if err := database.DB.
-		Preload("Options").
-		Preload("Package").
-		First(&createdProduct, product.ID).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load created product"})
-		return
-	}
-
-	// Return created product with full information
-	c.JSON(http.StatusCreated, createdProduct)
-}
-
-// UpdateProduct updates an existing product
-// @Summary Update an existing product
-// @Description Update a product and its options by providing the product ID and updated data
+// UpdateProduct updates product configuration without implicitly changing its cost source.
+// @Summary Update a product
 // @Tags Products
 // @Security BearerAuth
-// @Accept  json
-// @Produce  json
+// @Accept json
+// @Produce json
 // @Param id path int true "Product ID"
-// @Param request body object true "Product data and options"
+// @Param request body productWriteDocumentation true "Product configuration"
 // @Success 200 {object} models.Product
-// @Failure 400 {object} map[string]string "Invalid request"
-// @Failure 401 {object} map[string]string "Unauthorized"
-// @Failure 404 {object} map[string]string "Product not found"
-// @Failure 500 {object} map[string]string "Internal server error"
+// @Failure 400 {object} map[string]string
+// @Failure 409 {object} map[string]string
 // @Router /api/products/{id} [put]
+func UpdateProduct(c *gin.Context) { saveCostedProduct(c, true) }
 
-func UpdateProduct(c *gin.Context) {
-	var requestData struct {
-		Name        string  `json:"name" binding:"required,min=1"`
-		Description string  `json:"description"`
-		Price       float64 `json:"price" binding:"required,min=0"`
-		Cost        float64 `json:"cost" binding:"min=0"`
-		Image       *string `json:"image"`
-		RecipeIDs   []uint  `json:"recipe_ids"`
-		PackageID   uint    `json:"package_id" binding:"required"`
-	}
-
-	// Get product ID from URL parameters
-	productID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid product ID"})
+func saveCostedProduct(c *gin.Context, update bool) {
+	var input ProductWriteRequest
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
-
-	// Read data from request
-	if err := c.ShouldBindJSON(&requestData); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	if math.IsNaN(input.Price) || math.IsInf(input.Price, 0) || input.Price < 0 || (input.Cost != nil && (math.IsNaN(*input.Cost) || math.IsInf(*input.Cost, 0) || *input.Cost < 0)) {
+		c.JSON(400, gin.H{"error": "Prices must be finite and non-negative"})
 		return
 	}
-
-	// Additional business rules validation
-	if requestData.Name == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "name is required"})
-		return
-	}
-	if requestData.Price < 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "price cannot be negative"})
-		return
-	}
-	if requestData.Cost < 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "cost cannot be negative"})
-		return
-	}
-
-	// Get userID from context
-	userID, exists := c.Get("userID")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		return
-	}
+	userID := c.MustGet("userID").(uint)
 	workspaceID := c.MustGet("workspaceID").(uint)
-
-	// Check product existence
-	var existingProduct models.Product
-	if err := database.DB.Where("id = ? AND workspace_id = ?", productID, workspaceID).First(&existingProduct).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Product not found"})
-		return
-	}
-
-	// Check package existence and user ownership
-	var existingPackage models.Package
-	if err := database.DB.Where("id = ? AND workspace_id = ?", requestData.PackageID, workspaceID).First(&existingPackage).Error; err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid Package ID or package does not belong to workspace"})
-		return
-	}
-	if err := validateRecipeWorkspace(requestData.RecipeIDs, workspaceID); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	// Update product fields
-	existingProduct.Name = requestData.Name
-	existingProduct.Description = requestData.Description
-	existingProduct.Price = requestData.Price
-	existingProduct.Cost = requestData.Cost
-	existingProduct.PackageID = requestData.PackageID
-
-	// Set Image field only if it is not nil
-	if requestData.Image != nil {
-		existingProduct.Image = *requestData.Image
-	}
-
-	// Start transaction
-	tx := database.DB.Begin()
-
-	// Save updated product
-	if err := tx.Save(&existingProduct).Error; err != nil {
-		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update product"})
-		return
-	}
-
-	// Delete old product options
-	if err := tx.Where("product_id = ?", existingProduct.ID).Delete(&models.ProductOption{}).Error; err != nil {
-		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete old product options"})
-		return
-	}
-
-	// Add new options for recipes
-	var options []models.ProductOption
-	for _, recipeID := range requestData.RecipeIDs {
-		options = append(options, models.ProductOption{
-			ProductID: existingProduct.ID,
-			RecipeID:  recipeID,
-			UserID:    userID.(uint),
-		})
-	}
-
-	// Save new product options
-	if len(options) > 0 {
-		if err := tx.Create(&options).Error; err != nil {
-			tx.Rollback()
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create new product options"})
+	var id uint
+	if update {
+		var err error
+		id, err = costingID(c)
+		if err != nil {
+			c.JSON(400, gin.H{"error": "Invalid product ID"})
 			return
 		}
 	}
-
-	// Commit transaction for options
-	if err := tx.Commit().Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to commit transaction"})
+	var product models.Product
+	err := database.CostingTransaction(database.DB, false, func(tx *gorm.DB) error {
+		var pkg models.Package
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND workspace_id = ?", input.PackageID, workspaceID).First(&pkg).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return badCostInput("Package does not belong to this workspace")
+			}
+			return err
+		}
+		if update {
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Preload("CostComponents", "workspace_id = ?", workspaceID).Where("id = ? AND workspace_id = ?", id, workspaceID).First(&product).Error; err != nil {
+				return err
+			}
+		} else {
+			product.UserID = userID
+			product.WorkspaceID = &workspaceID
+			product.CostMode = models.CostModeManual
+		}
+		if product.CostMode == "" {
+			product.CostMode = models.CostModeManual
+		}
+		if input.CostMode != nil && *input.CostMode != product.CostMode {
+			product.CostMode = *input.CostMode
+			product.CostRecipeID = nil
+			product.CostComponents = nil
+		}
+		if input.CostRecipeID != nil {
+			if err := json.Unmarshal(input.CostRecipeID, &product.CostRecipeID); err != nil {
+				return badCostInput("Invalid cost_recipe_id")
+			}
+		}
+		replaceComponents := !update || input.CostMode != nil || input.Components != nil
+		if input.Components != nil {
+			var rows []models.ProductCostComponentInput
+			if err := json.Unmarshal(input.Components, &rows); err != nil {
+				return badCostInput("Invalid cost components")
+			}
+			product.CostComponents = nil
+			for i, row := range rows {
+				product.CostComponents = append(product.CostComponents, models.ProductCostComponent{WorkspaceID: workspaceID, RecipeID: row.RecipeID, QuantityG: row.QuantityG, Position: i})
+			}
+		}
+		if product.CostMode != models.CostModeManual && input.Cost != nil {
+			return costConflict("calculated_cost_read_only", "Calculated product cost is read-only; select Manual explicitly to enter a cost")
+		}
+		if input.Cost != nil {
+			product.Cost = *input.Cost
+		}
+		product.Name, product.Description, product.Price, product.PackageID = input.Name, input.Description, input.Price, input.PackageID
+		if input.Image != nil {
+			product.Image = *input.Image
+		}
+		costing := services.NewCosting(tx, workspaceID)
+		if err := costing.ValidateProductConfig(product); err != nil {
+			return err
+		}
+		if input.RecipeIDs != nil {
+			if err := validateRecipeWorkspace(tx, *input.RecipeIDs, workspaceID); err != nil {
+				return err
+			}
+		}
+		query := tx.Omit("CostComponents", "Options", "Package", "User", "Workspace")
+		if update {
+			if err := query.Save(&product).Error; err != nil {
+				return err
+			}
+		} else {
+			if err := query.Create(&product).Error; err != nil {
+				return err
+			}
+		}
+		if replaceComponents {
+			if err := tx.Where("product_id = ? AND workspace_id = ?", product.ID, workspaceID).Delete(&models.ProductCostComponent{}).Error; err != nil {
+				return err
+			}
+			for i := range product.CostComponents {
+				product.CostComponents[i].ID = 0
+				product.CostComponents[i].ProductID = product.ID
+			}
+			if len(product.CostComponents) > 0 {
+				if err := tx.Create(&product.CostComponents).Error; err != nil {
+					return err
+				}
+			}
+		}
+		if input.RecipeIDs != nil {
+			if err := tx.Where("product_id = ?", product.ID).Delete(&models.ProductOption{}).Error; err != nil {
+				return err
+			}
+			for _, recipeID := range *input.RecipeIDs {
+				if err := tx.Create(&models.ProductOption{ProductID: product.ID, RecipeID: recipeID, UserID: userID}).Error; err != nil {
+					return err
+				}
+			}
+		}
+		if err := tx.Preload("Options").Preload("Package", "workspace_id = ?", workspaceID).Where("id = ? AND workspace_id = ?", product.ID, workspaceID).First(&product).Error; err != nil {
+			return err
+		}
+		rows := []models.Product{product}
+		if err := costing.AttachProducts(rows); err != nil {
+			return err
+		}
+		product = rows[0]
+		return nil
+	})
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		c.JSON(404, gin.H{"error": "Product not found"})
 		return
 	}
-
-	// Load full information about updated product with package and options
-	var updatedProduct models.Product
-	if err := database.DB.
-		Preload("Options").
-		Preload("Package").
-		First(&updatedProduct, existingProduct.ID).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load updated product"})
+	if err != nil {
+		writeCostingError(c, err, "Failed to save product")
 		return
 	}
-
-	// Return updated product with full information
-	c.JSON(http.StatusOK, updatedProduct)
+	status := http.StatusCreated
+	if update {
+		status = http.StatusOK
+	}
+	c.JSON(status, product)
 }
 
 // DeleteProduct deletes an existing product by its ID
@@ -410,6 +326,12 @@ func DeleteProduct(c *gin.Context) {
 
 	// Start transaction for deleting product and related data
 	tx := database.DB.Begin()
+
+	if err := tx.Where("product_id = ? AND workspace_id = ?", product.ID, workspaceID).Delete(&models.ProductCostComponent{}).Error; err != nil {
+		tx.Rollback()
+		c.JSON(500, gin.H{"error": "Failed to delete product composition"})
+		return
+	}
 
 	// Delete related product options
 	if err := tx.Where("product_id = ?", product.ID).Delete(&models.ProductOption{}).Error; err != nil {

@@ -37,6 +37,7 @@ func setupTestDB(t *testing.T) *gorm.DB {
 		&models.Package{},
 		&models.Product{},
 		&models.ProductOption{},
+		&models.ProductCostComponent{},
 		&models.Client{},
 		&models.Order{},
 		&models.OrderItem{},
@@ -267,5 +268,34 @@ func mustCount(t *testing.T, db *gorm.DB, model any, target *int64) {
 	t.Helper()
 	if err := db.Model(model).Count(target).Error; err != nil {
 		t.Fatalf("count %T: %v", model, err)
+	}
+}
+
+func TestRefreshCleansCostComponentsBeforeReplacingDemoProducts(t *testing.T) {
+	db := setupTestDB(t)
+	if _, err := Run(db, Options{Confirm: ConfirmValue, Mode: ModeRefresh}); err != nil {
+		t.Fatal(err)
+	}
+	var product models.Product
+	if err := db.First(&product).Error; err != nil {
+		t.Fatal(err)
+	}
+	var recipe models.Recipe
+	if err := db.Where("workspace_id = ?", product.WorkspaceID).First(&recipe).Error; err != nil {
+		t.Fatal(err)
+	}
+	row := models.ProductCostComponent{WorkspaceID: *product.WorkspaceID, ProductID: product.ID, RecipeID: recipe.ID, QuantityG: "50"}
+	if err := db.Create(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Run(db, Options{Confirm: ConfirmValue, Mode: ModeRefresh}); err != nil {
+		t.Fatal(err)
+	}
+	var count int64
+	if err := db.Unscoped().Model(&models.ProductCostComponent{}).Where("id = ?", row.ID).Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatal("demo refresh left stale costing components")
 	}
 }

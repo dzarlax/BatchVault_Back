@@ -1,185 +1,163 @@
 package controllers
 
 import (
+	"errors"
+	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 	"mobile-backend-go/database"
 	"mobile-backend-go/models"
-	"mobile-backend-go/utils" // Import utils package
+	"mobile-backend-go/services"
 	"net/http"
 	"strconv"
-
-	"github.com/gin-gonic/gin"
 )
 
-// GetRecipes returns list of all recipes with optional filtering by recipe ID and ingredient ID
-// @Summary Get list of recipes
-// @Description Get all recipes available for the authenticated user with optional filtering by recipe_id and ingredient_id
+// GetRecipes returns workspace recipes with ingredient subtotals and explicit costing status.
+// @Summary Get recipes
 // @Tags Recipes
 // @Security BearerAuth
-// @Produce  json
-// @Param X-Workspace-ID header int false "Workspace ID"
-// @Param recipe_id query int false "Filter by Recipe ID" example(1)
-// @Param ingredient_id query int false "Filter by Ingredient ID" example(3)
+// @Produce json
+// @Param recipe_id query int false "Recipe ID"
+// @Param ingredient_id query int false "Ingredient ID"
 // @Success 200 {array} models.Recipe
-// @Failure 400 {object} map[string]string "Invalid parameters"
-// @Failure 401 {object} map[string]string "Unauthorized"
-// @Failure 500 {object} map[string]string "Failed to fetch recipes"
 // @Router /api/recipes [get]
 func GetRecipes(c *gin.Context) {
 	workspaceID := c.MustGet("workspaceID").(uint)
-	var recipes []models.Recipe
-
-	// Filtering by recipe_id
-	recipeIDParam := c.Query("recipe_id")
-	var recipeID uint
-	if recipeIDParam != "" {
-		id, err := strconv.Atoi(recipeIDParam)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid recipe ID"})
-			return
+	ids := map[string]uint{}
+	for _, key := range []string{"recipe_id", "ingredient_id"} {
+		if raw := c.Query(key); raw != "" {
+			value, err := strconv.ParseUint(raw, 10, 32)
+			if err != nil || value == 0 {
+				c.JSON(400, gin.H{"error": "Invalid " + key})
+				return
+			}
+			ids[key] = uint(value)
 		}
-		recipeID = uint(id)
 	}
-
-	// Filtering by ingredient_id
-	ingredientIDParam := c.Query("ingredient_id")
-	var ingredientID uint
-	if ingredientIDParam != "" {
-		id, err := strconv.Atoi(ingredientIDParam)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ingredient ID"})
-			return
+	recipes := []models.Recipe{}
+	err := database.CostingTransaction(database.DB, true, func(tx *gorm.DB) error {
+		query := tx.Where("recipes.workspace_id = ?", workspaceID)
+		if id := ids["recipe_id"]; id != 0 {
+			query = query.Where("recipes.id = ?", id)
 		}
-		ingredientID = uint(id)
-	}
-
-	query := database.DB.Where("workspace_id = ?", workspaceID).
-		Preload("RecipeIngredients.Ingredient")
-
-	// Apply filters if parameters are provided
-	if recipeID != 0 {
-		query = query.Where("recipes.id = ?", recipeID)
-	}
-	if ingredientID != 0 {
-		query = query.Joins("JOIN recipe_ingredients ON recipes.id = recipe_ingredients.recipe_id").
-			Where("recipe_ingredients.ingredient_id = ? and recipe_ingredients.deleted_at is NULL", ingredientID)
-	}
-
-	// Execute query
-	if err := query.Find(&recipes).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch recipes"})
+		if id := ids["ingredient_id"]; id != 0 {
+			query = query.Where("recipes.id IN (?)", tx.Model(&models.RecipeIngredient{}).Select("recipe_id").Where("ingredient_id = ?", id))
+		}
+		if err := query.Find(&recipes).Error; err != nil {
+			return err
+		}
+		return services.NewCosting(tx, workspaceID).AttachRecipes(recipes)
+	})
+	if err != nil {
+		writeCostingError(c, err, "Failed to fetch recipes")
 		return
 	}
-
-	// Calculate total cost for each recipe
-	for i, recipe := range recipes {
-		totalCost := 0.0
-		for j, ri := range recipe.RecipeIngredients {
-			// Load latest price for each ingredient
-			var latestPrice models.Price
-			if err := database.DB.Where("ingredient_id = ? AND workspace_id = ?", ri.IngredientID, workspaceID).
-				Order(latestPriceOrder).
-				Limit(1).
-				First(&latestPrice).Error; err == nil {
-				recipe.RecipeIngredients[j].Ingredient.Prices = []models.Price{latestPrice} // Assign latest price manually
-				cost, err := utils.CalculateIngredientCost(latestPrice.Price, latestPrice.Quantity, latestPrice.Unit, ri.Quantity, ri.Unit)
-				if err == nil {
-					recipes[i].RecipeIngredients[j].CalculatedCost = cost // Assign calculated cost
-					totalCost += cost
-				}
-			}
-		}
-		recipes[i].TotalCost = totalCost // Add total cost to response, but not save to database
-	}
-
-	c.JSON(http.StatusOK, recipes)
+	c.JSON(200, recipes)
 }
 
-// GetRecipe returns a single recipe by ID
+// GetRecipe returns one recipe and its current content-cost readiness.
 // @Summary Get a recipe
-// @Description Get a recipe by its ID for the authenticated user
 // @Tags Recipes
 // @Security BearerAuth
-// @Produce  json
-// @Param X-Workspace-ID header int false "Workspace ID"
+// @Produce json
 // @Param id path int true "Recipe ID"
 // @Success 200 {object} models.Recipe
-// @Failure 400 {object} map[string]string "Invalid recipe ID"
-// @Failure 401 {object} map[string]string "Unauthorized"
-// @Failure 404 {object} map[string]string "Recipe not found"
 // @Router /api/recipes/{id} [get]
 func GetRecipe(c *gin.Context) {
-	workspaceID := c.MustGet("workspaceID").(uint)
-	recipeID, err := strconv.Atoi(c.Param("id"))
+	id, err := costingID(c)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid recipe ID"})
+		c.JSON(400, gin.H{"error": "Invalid recipe ID"})
 		return
 	}
-
-	var recipe models.Recipe
-	if err := database.DB.Where("id = ? AND workspace_id = ?", recipeID, workspaceID).
-		Preload("RecipeIngredients.Ingredient").
-		First(&recipe).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Recipe not found"})
-		return
-	}
-
-	// Calculate total cost of recipe
-	totalCost := 0.0
-	for j, ri := range recipe.RecipeIngredients {
-		// Load latest price for each ingredient
-		var latestPrice models.Price
-		if err := database.DB.Where("ingredient_id = ? AND workspace_id = ?", ri.IngredientID, workspaceID).
-			Order(latestPriceOrder).
-			Limit(1).
-			First(&latestPrice).Error; err == nil {
-			recipe.RecipeIngredients[j].Ingredient.Prices = []models.Price{latestPrice} // Assign latest price manually
-			cost, err := utils.CalculateIngredientCost(latestPrice.Price, latestPrice.Quantity, latestPrice.Unit, ri.Quantity, ri.Unit)
-			if err == nil {
-				recipe.RecipeIngredients[j].CalculatedCost = cost // Assign calculated cost
-				totalCost += cost
-			}
+	workspaceID := c.MustGet("workspaceID").(uint)
+	rows := []models.Recipe{}
+	err = database.CostingTransaction(database.DB, true, func(tx *gorm.DB) error {
+		var recipe models.Recipe
+		if err := tx.Where("id = ? AND workspace_id = ?", id, workspaceID).First(&recipe).Error; err != nil {
+			return err
 		}
+		rows = append(rows, recipe)
+		return services.NewCosting(tx, workspaceID).AttachRecipes(rows)
+	})
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		c.JSON(404, gin.H{"error": "Recipe not found"})
+		return
 	}
-
-	recipe.TotalCost = totalCost // Add total cost to response, but not save to database
-	c.JSON(http.StatusOK, recipe)
+	if err != nil {
+		writeCostingError(c, err, "Failed to fetch recipe")
+		return
+	}
+	c.JSON(200, rows[0])
 }
 
-// CreateRecipe creates a new recipe
-// @Summary Create a new recipe
-// @Description Create a new recipe for the authenticated user
+// CreateRecipe creates a recipe, optionally with a known planned finished yield.
+// @Summary Create a recipe
 // @Tags Recipes
 // @Security BearerAuth
-// @Accept  json
-// @Produce  json
+// @Accept json
+// @Produce json
 // @Param recipe body models.RecipeCreateDTO true "Recipe data"
 // @Success 201 {object} models.Recipe
-// @Failure 400 {object} map[string]string "Bad request"
-// @Failure 401 {object} map[string]string "Unauthorized"
 // @Router /api/recipes [post]
 func CreateRecipe(c *gin.Context) {
+	var input models.RecipeCreateDTO
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	if err := services.ValidateCostDecimal(input.PlannedYieldG.Value, 3, false); err != nil {
+		c.JSON(400, gin.H{"error": "Planned yield must be positive grams with up to three decimals"})
+		return
+	}
 	userID := c.MustGet("userID").(uint)
 	workspaceID := c.MustGet("workspaceID").(uint)
-
-	var requestData models.RecipeCreateDTO
-	if err := c.ShouldBindJSON(&requestData); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	recipe := models.Recipe{Name: input.Name, UserID: userID, WorkspaceID: &workspaceID, PlannedYieldG: input.PlannedYieldG.Value}
+	if err := database.DB.Create(&recipe).Error; err != nil {
+		c.JSON(500, gin.H{"error": "Failed to create recipe"})
 		return
 	}
+	c.JSON(http.StatusCreated, recipe)
+}
 
-	// Create Recipe model from DTO
-	newRecipe := models.Recipe{
-		Name:        requestData.Name,
-		UserID:      userID,
-		WorkspaceID: &workspaceID,
-	}
+type recipeYieldPatch struct {
+	PlannedYieldG models.OptionalDecimal `json:"planned_yield_g" swaggertype:"number"`
+}
 
-	if err := database.DB.Create(&newRecipe).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create recipe"})
+// UpdateRecipeYield sets or clears a recipe's planned finished output.
+// @Summary Update planned recipe yield
+// @Tags Recipes
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param id path int true "Recipe ID"
+// @Param request body recipeYieldPatch true "Planned finished yield in grams; null clears it"
+// @Success 200 {object} models.Recipe
+// @Router /api/recipes/{id} [patch]
+func UpdateRecipeYield(c *gin.Context) {
+	id, err := costingID(c)
+	if err != nil {
+		c.JSON(400, gin.H{"error": "Invalid recipe ID"})
 		return
 	}
-
-	c.JSON(http.StatusCreated, newRecipe)
+	var input recipeYieldPatch
+	if err := c.ShouldBindJSON(&input); err != nil || !input.PlannedYieldG.Set {
+		c.JSON(400, gin.H{"error": "Provide planned_yield_g or null"})
+		return
+	}
+	if err := services.ValidateCostDecimal(input.PlannedYieldG.Value, 3, false); err != nil {
+		c.JSON(400, gin.H{"error": "Planned yield must be positive grams with up to three decimals"})
+		return
+	}
+	workspaceID := c.MustGet("workspaceID").(uint)
+	result := database.DB.Model(&models.Recipe{}).Where("id = ? AND workspace_id = ?", id, workspaceID).Update("planned_yield_g", input.PlannedYieldG.Value)
+	if result.Error != nil {
+		c.JSON(500, gin.H{"error": "Failed to update recipe yield"})
+		return
+	}
+	if result.RowsAffected == 0 {
+		c.JSON(404, gin.H{"error": "Recipe not found"})
+		return
+	}
+	GetRecipe(c)
 }
 
 // DeleteRecipe deletes a recipe by ID

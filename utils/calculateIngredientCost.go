@@ -20,35 +20,15 @@ func CalculateIngredientCost(price float64, priceQuantity float64, priceUnit str
 		return 0, errors.New("recipe quantity cannot be negative")
 	}
 
-	priceDimension, priceFactor := normalizeIngredientUnit(priceUnit)
-	recipeDimension, recipeFactor := normalizeIngredientUnit(recipeUnit)
+	priceDimension, priceFactor := IngredientUnitScale(priceUnit)
+	recipeDimension, recipeFactor := IngredientUnitScale(recipeUnit)
 	if priceDimension != recipeDimension {
 		return 0, fmt.Errorf("incompatible units: %s and %s", priceUnit, recipeUnit)
 	}
 
-	basePriceQuantity := priceQuantity * priceFactor
-	baseRecipeQuantity := recipeQuantity * recipeFactor
+	basePriceQuantity := priceQuantity * float64(priceFactor)
+	baseRecipeQuantity := recipeQuantity * float64(recipeFactor)
 	unitPrice := price / basePriceQuantity
 
 	return unitPrice * baseRecipeQuantity, nil
-}
-
-func normalizeIngredientUnit(unit string) (string, float64) {
-	normalized := strings.ToLower(strings.TrimSpace(unit))
-	switch normalized {
-	case "":
-		return "count", 1
-	case "kg":
-		return "mass", 1000
-	case "g":
-		return "mass", 1
-	case "l":
-		return "volume", 1000
-	case "ml":
-		return "volume", 1
-	case "pcs":
-		return "count", 1
-	default:
-		return "custom:" + normalized, 1
-	}
 }

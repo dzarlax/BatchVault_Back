@@ -3,7 +3,6 @@ package controllers
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log"
 	"mobile-backend-go/constants"
 	"mobile-backend-go/database"
@@ -11,11 +10,9 @@ import (
 	"mobile-backend-go/services"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 // GetOrder returns an order by ID
@@ -91,157 +88,15 @@ func GetOrders(c *gin.Context) {
 // @Security BearerAuth
 // @Accept  json
 // @Produce  json
-// @Param order body object true "Order data"
+// @Param order body costedOrderInput true "Order data; calculated cost_price is an assertion"
 // @Success 201 {object} models.Order
 // @Failure 400 {object} map[string]string "Bad request"
 // @Failure 401 {object} map[string]string "Unauthorized"
+// @Failure 409 {object} map[string]string "Cost changed or calculation incomplete"
 // @Failure 500 {object} map[string]string "Internal Server Error"
 // @Router /api/orders [post]
 func AddOrder(c *gin.Context) {
-	userID := c.MustGet("userID").(uint)
-	workspaceID := c.MustGet("workspaceID").(uint)
-
-	var requestData struct {
-		ClientID uint      `json:"client_id" binding:"required"`
-		Date     time.Time `json:"date"`
-		Status   string    `json:"status"`
-		Comment  string    `json:"comment"`
-		Items    []struct {
-			ProductID uint     `json:"product_id" binding:"required"`
-			Quantity  int      `json:"quantity" binding:"required,min=1"`
-			Price     float64  `json:"price" binding:"required,min=0"`
-			CostPrice *float64 `json:"cost_price" binding:"omitempty,min=0"`
-		} `json:"items" binding:"required,min=1"`
-	}
-
-	// Read data from request
-	if err := c.ShouldBindJSON(&requestData); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	// Additional business rules validation
-	if requestData.ClientID == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "client_id is required"})
-		return
-	}
-
-	// Validate order items
-	for i, item := range requestData.Items {
-		if item.ProductID == 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("items[%d].product_id is required", i)})
-			return
-		}
-		if item.Quantity <= 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("items[%d].quantity must be greater than 0", i)})
-			return
-		}
-		if item.Price < 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("items[%d].price cannot be negative", i)})
-			return
-		}
-		if item.CostPrice != nil && *item.CostPrice < 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("items[%d].cost_price cannot be negative", i)})
-			return
-		}
-	}
-
-	if requestData.Status == "" {
-		requestData.Status = constants.OrderStatusNew // Set default status
-	}
-	if !constants.IsValidOrderStatus(requestData.Status) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid order status"})
-		return
-	}
-
-	// Check client existence and ownership
-	var client models.Client
-	if err := database.DB.Where("id = ? AND workspace_id = ?", requestData.ClientID, workspaceID).First(&client).Error; err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid client ID or client does not belong to workspace"})
-		return
-	}
-
-	orderDate := requestData.Date
-	if orderDate.IsZero() {
-		orderDate = time.Now()
-	}
-
-	// Create order
-	newOrder := models.Order{
-		ClientID:    requestData.ClientID,
-		Date:        orderDate,
-		Status:      requestData.Status,
-		Comment:     requestData.Comment,
-		UserID:      userID,
-		WorkspaceID: &workspaceID,
-	}
-
-	// Start transaction
-	tx := database.DB.Begin()
-
-	// Save order
-	if err := tx.Create(&newOrder).Error; err != nil {
-		tx.Rollback()
-		log.Printf("Failed to add order: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to add order"})
-		return
-	}
-
-	// Create order items with product validation and auto-filling cost_price
-	var orderItems []models.OrderItem
-	for _, item := range requestData.Items {
-		// Fetch product for validation and cost
-		var product models.Product
-		if err := tx.Where("id = ? AND workspace_id = ?", item.ProductID, workspaceID).First(&product).Error; err != nil {
-			tx.Rollback()
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid product ID or product does not belong to workspace"})
-			return
-		}
-
-		// Determine cost_price: use provided value or get from product
-		costPrice := product.Cost // Default to product cost
-		if item.CostPrice != nil {
-			costPrice = *item.CostPrice // Use provided value if specified
-		}
-
-		orderItems = append(orderItems, models.OrderItem{
-			OrderID:    newOrder.ID,
-			ProductID:  item.ProductID,
-			Quantity:   item.Quantity,
-			Price:      item.Price,
-			Cost_price: costPrice,
-		})
-	}
-
-	// Save order items
-	if len(orderItems) > 0 {
-		if err := tx.Create(&orderItems).Error; err != nil {
-			tx.Rollback()
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create order items"})
-			return
-		}
-	}
-
-	// Commit transaction
-	if err := tx.Commit().Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to commit transaction"})
-		return
-	}
-	dispatchOrderNotification(services.OrderEventCreated, newOrder.ID, workspaceID)
-
-	// Load full order information
-	var createdOrder models.Order
-	if err := database.DB.
-		Preload("Client").
-		Preload("Items").
-		Preload("Items.Product").
-		Preload("Items.Product.Package").
-		First(&createdOrder, newOrder.ID).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load created order"})
-		return
-	}
-
-	c.JSON(http.StatusCreated, createdOrder)
+	addCostedOrder(c)
 }
 
 // UpdateOrder updates an order
@@ -252,173 +107,16 @@ func AddOrder(c *gin.Context) {
 // @Accept  json
 // @Produce  json
 // @Param id path int true "Order ID"
-// @Param order body models.Order true "Order data"
+// @Param order body costedOrderInput true "Order data; preserve saved item IDs"
 // @Success 200 {object} map[string]string "Order updated successfully"
 // @Failure 400 {object} map[string]string "Invalid order ID"
 // @Failure 401 {object} map[string]string "Unauthorized"
 // @Failure 404 {object} map[string]string "Order not found"
 // @Failure 500 {object} map[string]string "Internal Server Error"
+// @Failure 409 {object} map[string]string "Cost assertion or historical identity conflict"
 // @Router /api/orders/{id} [put]
 func UpdateOrder(c *gin.Context) {
-	workspaceID := c.MustGet("workspaceID").(uint)
-	orderID, err := strconv.Atoi(c.Param("id"))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid order ID"})
-		return
-	}
-
-	var existingOrder models.Order
-	if err := database.DB.Where("id = ? AND workspace_id = ?", orderID, workspaceID).Preload("Items").First(&existingOrder).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Order not found"})
-		return
-	}
-
-	var requestData struct {
-		ClientID uint      `json:"client_id" binding:"required"`
-		Date     time.Time `json:"date"`
-		Status   string    `json:"status"`
-		Comment  string    `json:"comment"`
-		Items    []struct {
-			ProductID uint     `json:"product_id" binding:"required"`
-			Quantity  int      `json:"quantity" binding:"required,min=1"`
-			Price     float64  `json:"price" binding:"required,min=0"`
-			CostPrice *float64 `json:"cost_price" binding:"omitempty,min=0"`
-		} `json:"items" binding:"required,min=1"`
-	}
-
-	// Read data from request
-	if err := c.ShouldBindJSON(&requestData); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	// Additional business rules validation
-	if requestData.ClientID == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "client_id is required"})
-		return
-	}
-	if !constants.IsValidOrderStatus(requestData.Status) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid order status"})
-		return
-	}
-
-	// Validate order items
-	for i, item := range requestData.Items {
-		if item.ProductID == 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("items[%d].product_id is required", i)})
-			return
-		}
-		if item.Quantity <= 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("items[%d].quantity must be greater than 0", i)})
-			return
-		}
-		if item.Price < 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("items[%d].price cannot be negative", i)})
-			return
-		}
-		if item.CostPrice != nil && *item.CostPrice < 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("items[%d].cost_price cannot be negative", i)})
-			return
-		}
-	}
-
-	var client models.Client
-	if err := database.DB.Where("id = ? AND workspace_id = ?", requestData.ClientID, workspaceID).First(&client).Error; err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid client ID or client does not belong to workspace"})
-		return
-	}
-
-	// Start transaction
-	tx := database.DB.Begin()
-	if tx.Error != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update order"})
-		return
-	}
-
-	// Lock the current row while deciding whether this request changes its status.
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-		Where("id = ? AND workspace_id = ?", orderID, workspaceID).
-		First(&existingOrder).Error; err != nil {
-		tx.Rollback()
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Order not found"})
-		} else {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update order"})
-		}
-		return
-	}
-	statusTransition := isStatusTransition(existingOrder.Status, requestData.Status)
-
-	// Update order fields
-	existingOrder.ClientID = requestData.ClientID
-	if !requestData.Date.IsZero() {
-		existingOrder.Date = requestData.Date
-	} else if existingOrder.Date.IsZero() {
-		existingOrder.Date = existingOrder.CreatedAt
-	}
-	existingOrder.Status = requestData.Status
-	existingOrder.Comment = requestData.Comment
-
-	// Save updated order
-	if err := tx.Save(&existingOrder).Error; err != nil {
-		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update order"})
-		return
-	}
-
-	// Delete old order items
-	if err := tx.Where("order_id = ?", existingOrder.ID).Delete(&models.OrderItem{}).Error; err != nil {
-		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete old order items"})
-		return
-	}
-
-	// Add new order items with auto-filling cost_price
-	var newOrderItems []models.OrderItem
-	for _, item := range requestData.Items {
-		// Fetch product to get cost if needed
-		var product models.Product
-		if err := tx.Where("id = ? AND workspace_id = ?", item.ProductID, workspaceID).First(&product).Error; err != nil {
-			tx.Rollback()
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid product ID or product does not belong to workspace"})
-			return
-		}
-
-		// Determine cost_price: use provided value or get from product
-		costPrice := product.Cost // Default to product cost
-		if item.CostPrice != nil {
-			costPrice = *item.CostPrice // Use provided value if specified
-		}
-
-		newOrderItems = append(newOrderItems, models.OrderItem{
-			OrderID:    existingOrder.ID,
-			ProductID:  item.ProductID,
-			Quantity:   item.Quantity,
-			Price:      item.Price,
-			Cost_price: costPrice,
-		})
-	}
-
-	// Save new order items
-	if len(newOrderItems) > 0 {
-		if err := tx.Create(&newOrderItems).Error; err != nil {
-			tx.Rollback()
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create new order items"})
-			return
-		}
-	}
-
-	// Commit transaction
-	if err := tx.Commit().Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to commit transaction"})
-		return
-	}
-	if statusTransition {
-		dispatchOrderNotification(orderNotificationType(requestData.Status), existingOrder.ID, workspaceID)
-	}
-
-	// Return success response
-	c.JSON(http.StatusOK, gin.H{"message": "Order updated successfully"})
+	updateCostedOrder(c)
 }
 
 // UpdateOrderStatus updates order status

@@ -18,5 +18,6 @@ type RecipeIngredient struct {
 	Unit           string         `json:"unit"`
 	Recipe         Recipe         `json:"recipe" gorm:"foreignKey:RecipeID"`
 	Ingredient     Ingredient     `json:"ingredient" gorm:"foreignKey:IngredientID"`
+	CostStatus     string         `json:"cost_status,omitempty" gorm:"-"`
 	CalculatedCost float64        `json:"calculated_cost" gorm:"-"` // Field not persisted to database
 }
