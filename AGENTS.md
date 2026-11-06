@@ -210,9 +210,11 @@ Login response format:
 
 ### Order Creation/Update
 
-Orders support automatic cost price assignment:
-- If `cost_price` is provided in request items, use it
-- Otherwise, fetch from `Product.Cost` field automatically
+Orders support mode-aware cost assignment:
+- Manual products use an explicit non-negative `cost_price` (including zero), or their stored manual cost when omitted.
+- New/replaced calculated rows recompute the server estimate; a submitted cost is a stale-quote assertion, never an override.
+- Saved row IDs preserve historical cost and versioned snapshots before current product configuration is consulted.
+- Changed or incomplete calculated quotes return 409 and roll back the write.
 - Uses database transactions to ensure data consistency
 - Replaces all order items on update (delete old, create new)
 - Sorted by creation date (newest first) in list views
@@ -323,3 +325,9 @@ Common HTTP status codes:
 - `404` - Not Found (resource not found)
 - `429` - Too Many Requests (rate limit exceeded)
 - `500` - Internal Server Error (server error)
+
+## Product Costing
+
+See `docs/product-costing.md` and `API_DOCUMENTATION.md` for the complete contract. Recipes declare planned finished yield in grams; packages declare net content grams and one package cost. Products explicitly select manual, one recipe, or a fixed assortment. Assortment component grams must exactly match package net weight. Missing inputs produce a null total; zero remains a valid recorded cost. Calculations retain exact decimal precision and round only the final sale-unit amount. Amounts use the workspace currency without conversion.
+
+Costing transactions use repeatable read. Package mutation uses read committed after the shared package lock so usage checks observe links committed while waiting. Optional PostgreSQL checks require a disposable localhost database named `costing_test` via `COSTING_TEST_DATABASE_URL`; never use production data.
