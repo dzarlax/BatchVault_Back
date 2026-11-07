@@ -78,6 +78,10 @@ func ConnectDatabase() {
 		log.Fatal("Product costing migration error: ", err)
 	}
 
+	if err := MigrateCooking(DB); err != nil {
+		log.Fatal("Cooking migration error: ", err)
+	}
+
 	// Create indexes for performance
 	createIndexes()
 

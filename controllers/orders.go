@@ -2,7 +2,6 @@ package controllers
 
 import (
 	"context"
-	"errors"
 	"log"
 	"mobile-backend-go/constants"
 	"mobile-backend-go/database"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // GetOrder returns an order by ID
@@ -160,23 +160,31 @@ func UpdateOrderStatus(c *gin.Context) {
 		return
 	}
 
-	result := database.DB.Model(&models.Order{}).
-		Where("id = ? AND workspace_id = ? AND status <> ?", orderID, workspaceID, requestBody.Status).
-		Update("status", requestBody.Status)
-	if result.Error != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update order status"})
+	changed := false
+	err = services.CookingOrderTransaction(database.DB, workspaceID, func(tx *gorm.DB) error {
+		if e := cookingOrderWriteError(tx, c.GetString("workspaceRole"), workspaceID, uint(orderID)); e != nil {
+			return e
+		}
+		changed = false
+		var order models.Order
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND workspace_id = ?", orderID, workspaceID).First(&order).Error; err != nil {
+			return err
+		}
+		if order.Status == requestBody.Status {
+			return nil
+		}
+		changed = true
+		order.Status = requestBody.Status
+		if err := tx.Omit("Items", "Client", "User", "Workspace").Save(&order).Error; err != nil {
+			return err
+		}
+		return services.SyncCookingOrder(tx, workspaceID, c.MustGet("userID").(uint), order.ID, order.Status, false)
+	})
+	if err != nil {
+		cookingFailure(c, err)
 		return
 	}
-	if result.RowsAffected == 0 {
-		var order models.Order
-		if err := database.DB.Select("id").Where("id = ? AND workspace_id = ?", orderID, workspaceID).First(&order).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				c.JSON(http.StatusNotFound, gin.H{"error": "Order not found"})
-			} else {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update order status"})
-			}
-			return
-		}
+	if !changed {
 		c.JSON(http.StatusOK, gin.H{"message": "Order status updated successfully"})
 		return
 	}
@@ -206,13 +214,21 @@ func DeleteOrder(c *gin.Context) {
 		return
 	}
 
-	result := database.DB.Where("id = ? AND workspace_id = ?", orderID, workspaceID).Delete(&models.Order{})
-	if result.Error != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete order"})
-		return
-	}
-	if result.RowsAffected == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Order not found"})
+	err = services.CookingOrderTransaction(database.DB, workspaceID, func(tx *gorm.DB) error {
+		if e := cookingOrderWriteError(tx, c.GetString("workspaceRole"), workspaceID, uint(orderID)); e != nil {
+			return e
+		}
+		var order models.Order
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND workspace_id = ?", orderID, workspaceID).First(&order).Error; err != nil {
+			return err
+		}
+		if err := services.SyncCookingOrder(tx, workspaceID, c.MustGet("userID").(uint), order.ID, "canceled", true); err != nil {
+			return err
+		}
+		return tx.Delete(&order).Error
+	})
+	if err != nil {
+		cookingFailure(c, err)
 		return
 	}
 

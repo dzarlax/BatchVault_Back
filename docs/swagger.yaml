@@ -80,6 +80,8 @@ definitions:
     type: object
   controllers.WorkspaceCapabilities:
     properties:
+      cooking_v1:
+        type: boolean
       product_types_v1:
         type: boolean
     type: object
@@ -317,6 +319,419 @@ definitions:
       status:
         type: string
     type: object
+  models.CookingActiveRun:
+    properties:
+      id:
+        type: integer
+      title:
+        type: string
+    type: object
+  models.CookingAdjustmentInput:
+    properties:
+      kind:
+        type: string
+      lot_id:
+        type: integer
+      operation_id:
+        type: string
+      product_id:
+        type: integer
+      quantity:
+        type: string
+      reason:
+        type: string
+      recipe_id:
+        type: integer
+      run_id:
+        type: integer
+      stock_version:
+        type: integer
+    type: object
+  models.CookingArchiveInput:
+    properties:
+      operation_id:
+        type: string
+      version:
+        type: integer
+    type: object
+  models.CookingComponent:
+    properties:
+      quantity_g:
+        type: string
+      recipe_id:
+        type: integer
+    type: object
+  models.CookingCreateInput:
+    properties:
+      acknowledged_run_ids:
+        items:
+          type: integer
+        type: array
+      base_selections:
+        additionalProperties:
+          type: integer
+        type: object
+      date:
+        type: string
+      extras:
+        items:
+          $ref: '#/definitions/models.CookingExtraInput'
+        type: array
+      operation_id:
+        type: string
+      order_ids:
+        items:
+          type: integer
+        type: array
+      run_id:
+        type: integer
+      source_signature:
+        type: string
+      stock_uses:
+        items:
+          $ref: '#/definitions/models.CookingStockUse'
+        type: array
+      stock_version:
+        type: integer
+      title:
+        type: string
+      version:
+        type: integer
+    type: object
+  models.CookingEvent:
+    properties:
+      created_at:
+        type: string
+      id:
+        type: integer
+      kind:
+        type: string
+      operation_id:
+        type: string
+      payload:
+        type: object
+      run_id:
+        type: integer
+    type: object
+  models.CookingExtraInput:
+    properties:
+      finished_g:
+        type: string
+      recipe_id:
+        type: integer
+    type: object
+  models.CookingFlavorPlan:
+    properties:
+      base_recipe_ingredient_id:
+        type: integer
+      issues:
+        items:
+          $ref: '#/definitions/models.CookingIssue'
+        type: array
+      name:
+        type: string
+      recipe_id:
+        type: integer
+      recipe_snapshot:
+        $ref: '#/definitions/models.CookingRecipeSnapshot'
+      suggested_meat_g:
+        type: string
+      target_finished_g:
+        type: string
+    type: object
+  models.CookingIngredientAmount:
+    properties:
+      ingredient_id:
+        type: integer
+      name:
+        type: string
+      quantity:
+        type: string
+      recipe_ingredient_id:
+        type: integer
+      type:
+        type: string
+      unit:
+        type: string
+    type: object
+  models.CookingIssue:
+    properties:
+      code:
+        type: string
+      field:
+        type: string
+      message:
+        type: string
+      product_id:
+        type: integer
+      recipe_id:
+        type: integer
+    type: object
+  models.CookingOrderLine:
+    properties:
+      order_id:
+        type: integer
+      order_item_id:
+        type: integer
+      product_id:
+        type: integer
+      quantity:
+        type: integer
+    type: object
+  models.CookingPackingInput:
+    properties:
+      actual_usable_g:
+        items:
+          $ref: '#/definitions/models.CookingComponent'
+        type: array
+      lines:
+        items:
+          $ref: '#/definitions/models.CookingPackingLineInput'
+        type: array
+      operation_id:
+        type: string
+      sources:
+        items:
+          $ref: '#/definitions/models.CookingStockUse'
+        type: array
+      stock_version:
+        type: integer
+      version:
+        type: integer
+    type: object
+  models.CookingPackingLineInput:
+    properties:
+      product_id:
+        type: integer
+      quantity:
+        type: integer
+    type: object
+  models.CookingPackingPreview:
+    properties:
+      consumption:
+        items:
+          $ref: '#/definitions/models.CookingComponent'
+        type: array
+      lines:
+        items:
+          $ref: '#/definitions/models.CookingPackingLineInput'
+        type: array
+      remaining:
+        items:
+          $ref: '#/definitions/models.CookingComponent'
+        type: array
+      total_packs:
+        type: integer
+    type: object
+  models.CookingPlan:
+    properties:
+      flavors:
+        items:
+          $ref: '#/definitions/models.CookingFlavorPlan'
+        type: array
+      issues:
+        items:
+          $ref: '#/definitions/models.CookingIssue'
+        type: array
+      order_lines:
+        items:
+          $ref: '#/definitions/models.CookingOrderLine'
+        type: array
+      products:
+        items:
+          $ref: '#/definitions/models.CookingProductSnapshot'
+        type: array
+    type: object
+  models.CookingPlanInput:
+    properties:
+      acknowledged_run_ids:
+        items:
+          type: integer
+        type: array
+      base_selections:
+        additionalProperties:
+          type: integer
+        type: object
+      extras:
+        items:
+          $ref: '#/definitions/models.CookingExtraInput'
+        type: array
+      order_ids:
+        items:
+          type: integer
+        type: array
+      run_id:
+        type: integer
+      stock_uses:
+        items:
+          $ref: '#/definitions/models.CookingStockUse'
+        type: array
+    type: object
+  models.CookingPlanPreview:
+    properties:
+      active_runs:
+        items:
+          $ref: '#/definitions/models.CookingActiveRun'
+        type: array
+      plan:
+        $ref: '#/definitions/models.CookingPlan'
+      source_signature:
+        type: string
+      stock:
+        $ref: '#/definitions/models.CookingStock'
+      stock_version:
+        type: integer
+    type: object
+  models.CookingPreparation:
+    properties:
+      allocated_meat_g:
+        type: string
+      flavors:
+        items:
+          $ref: '#/definitions/models.CookingPreparedFlavor'
+        type: array
+      ingredients_total:
+        items:
+          $ref: '#/definitions/models.CookingIngredientAmount'
+        type: array
+      prepared_meat_g:
+        type: string
+      unallocated_meat_g:
+        type: string
+    type: object
+  models.CookingPreparationFlavorInput:
+    properties:
+      actual_meat_g:
+        type: string
+      base_recipe_ingredient_id:
+        type: integer
+      recipe_id:
+        type: integer
+    type: object
+  models.CookingPreparationInput:
+    properties:
+      flavors:
+        items:
+          $ref: '#/definitions/models.CookingPreparationFlavorInput'
+        type: array
+      operation_id:
+        type: string
+      prepared_meat_g:
+        type: string
+      recipe_id:
+        type: integer
+      run_id:
+        type: integer
+      source_signature:
+        type: string
+      version:
+        type: integer
+    type: object
+  models.CookingPreparedFlavor:
+    properties:
+      actual_meat_g:
+        type: string
+      expected_yield_g:
+        type: string
+      ingredients:
+        items:
+          $ref: '#/definitions/models.CookingIngredientAmount'
+        type: array
+      name:
+        type: string
+      recipe_id:
+        type: integer
+      recipe_snapshot:
+        $ref: '#/definitions/models.CookingRecipeSnapshot'
+    type: object
+  models.CookingProductSnapshot:
+    properties:
+      components:
+        items:
+          $ref: '#/definitions/models.CookingComponent'
+        type: array
+      configuration_version:
+        type: integer
+      id:
+        type: integer
+      name:
+        type: string
+      net_weight_g:
+        type: string
+    type: object
+  models.CookingRecipeSnapshot:
+    properties:
+      base_recipe_ingredient_id:
+        type: integer
+      id:
+        type: integer
+      ingredients:
+        items:
+          $ref: '#/definitions/models.CookingIngredientAmount'
+        type: array
+      name:
+        type: string
+      planned_yield_g:
+        type: string
+    type: object
+  models.CookingResultInput:
+    properties:
+      actual_usable_g:
+        items:
+          $ref: '#/definitions/models.CookingComponent'
+        type: array
+      operation_id:
+        type: string
+      packing:
+        $ref: '#/definitions/models.CookingPackingInput'
+      stock_version:
+        type: integer
+      version:
+        type: integer
+    type: object
+  models.CookingRun:
+    properties:
+      actual_output:
+        items:
+          $ref: '#/definitions/models.CookingComponent'
+        type: array
+      created_at:
+        type: string
+      date:
+        type: string
+      events:
+        items:
+          $ref: '#/definitions/models.CookingEvent'
+        type: array
+      id:
+        type: integer
+      lots:
+        items:
+          $ref: '#/definitions/models.CookingStockLot'
+        type: array
+      order_changes:
+        items:
+          $ref: '#/definitions/models.CookingIssue'
+        type: array
+      plan:
+        $ref: '#/definitions/models.CookingPlan'
+      plan_input:
+        $ref: '#/definitions/models.CookingPlanInput'
+      preparation:
+        $ref: '#/definitions/models.CookingPreparation'
+      source_signature:
+        type: string
+      state:
+        type: string
+      stock_version:
+        type: integer
+      title:
+        type: string
+      updated_at:
+        type: string
+      version:
+        type: integer
+    type: object
   models.CookingSession:
     properties:
       created_at:
@@ -386,6 +801,57 @@ definitions:
       unit:
         type: string
       updated_at:
+        type: string
+    type: object
+  models.CookingStock:
+    properties:
+      events:
+        items:
+          $ref: '#/definitions/models.CookingEvent'
+        type: array
+      lots:
+        items:
+          $ref: '#/definitions/models.CookingStockLot'
+        type: array
+      version:
+        type: integer
+    type: object
+  models.CookingStockLot:
+    properties:
+      available:
+        type: string
+      composition:
+        items:
+          $ref: '#/definitions/models.CookingComponent'
+        type: array
+      configuration_version:
+        type: integer
+      created_at:
+        type: string
+      id:
+        type: integer
+      kind:
+        type: string
+      name:
+        type: string
+      product_id:
+        type: integer
+      quantity:
+        type: string
+      recipe_id:
+        type: integer
+      reserved:
+        type: string
+      run_id:
+        type: integer
+      unit:
+        type: string
+    type: object
+  models.CookingStockUse:
+    properties:
+      lot_id:
+        type: integer
+      quantity:
         type: string
     type: object
   models.CostComponentEstimate:
@@ -1346,6 +1812,928 @@ paths:
       summary: Update a client
       tags:
       - Clients
+  /api/cooking-runs:
+    get:
+      parameters:
+      - description: Previous next_cursor; at most 50 results
+        in: query
+        name: cursor
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: List cooking plans by descending cursor
+      tags:
+      - Cooking
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Cooking request; quantities are decimal strings
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.CookingCreateInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.CookingRun'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Create a cooking plan and reserve selected stock
+      tags:
+      - Cooking
+  /api/cooking-runs/{id}:
+    get:
+      parameters:
+      - description: Cooking run ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.CookingRun'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Read a cooking run with snapshots and history
+      tags:
+      - Cooking
+  /api/cooking-runs/{id}/archive:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Cooking request; quantities are decimal strings
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.CookingArchiveInput'
+      - description: Cooking run ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.CookingRun'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Archive a run and release its remaining reservations
+      tags:
+      - Cooking
+  /api/cooking-runs/{id}/packing-preview:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Cooking request; quantities are decimal strings
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.CookingPackingInput'
+      - description: Cooking run ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.CookingPackingPreview'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Preview packaging consumption without writing stock
+      tags:
+      - Cooking
+  /api/cooking-runs/{id}/packings:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Cooking request; quantities are decimal strings
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.CookingPackingInput'
+      - description: Cooking run ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.CookingRun'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Pack more finished stock using frozen compositions
+      tags:
+      - Cooking
+  /api/cooking-runs/{id}/plan:
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: Cooking request; quantities are decimal strings
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.CookingCreateInput'
+      - description: Cooking run ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.CookingRun'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Explicitly replace an uncooked plan using a fresh quote
+      tags:
+      - Cooking
+  /api/cooking-runs/{id}/preparation:
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: Cooking request; quantities are decimal strings
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.CookingPreparationInput'
+      - description: Cooking run ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.CookingRun'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Save actual main ingredient distribution and frozen recipes
+      tags:
+      - Cooking
+  /api/cooking-runs/{id}/results:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Cooking request; quantities are decimal strings
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.CookingResultInput'
+      - description: Cooking run ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.CookingRun'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Record usable output and optional first packing atomically
+      tags:
+      - Cooking
+  /api/cooking-stock:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.CookingStock'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Read finished stock and recent quantity history
+      tags:
+      - Cooking
+  /api/cooking-stock/adjustments:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Cooking request; quantities are decimal strings
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.CookingAdjustmentInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.CookingStock'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Record initial stock, return, waste or signed correction
+      tags:
+      - Cooking
+  /api/cooking/operations/{operation_id}:
+    get:
+      parameters:
+      - description: Stable operation UUID
+        in: path
+        name: operation_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Recover a committed operation result
+      tags:
+      - Cooking
+  /api/cooking/plan-preview:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Cooking request; quantities are decimal strings
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.CookingPlanInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.CookingPlanPreview'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Preview order demand and selected finished stock
+      tags:
+      - Cooking
+  /api/cooking/preparation-preview:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Cooking request; quantities are decimal strings
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.CookingPreparationInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.CookingPreparation'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Calculate marinades from actual main ingredient weights
+      tags:
+      - Cooking
   /api/cooking_sessions:
     get:
       description: Get all cooking sessions available for the authenticated user

@@ -193,7 +193,11 @@ func updateCostedOrder(c *gin.Context) {
 	}
 	workspaceID := c.MustGet("workspaceID").(uint)
 	transition := false
-	err = database.CostingTransaction(database.DB, false, func(tx *gorm.DB) error {
+	err = services.CookingOrderTransaction(database.DB, workspaceID, func(tx *gorm.DB) error {
+		if e := cookingOrderWriteError(tx, c.GetString("workspaceRole"), workspaceID, id); e != nil {
+			return e
+		}
+		transition = false
 		var order models.Order
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Preload("Items").Where("id = ? AND workspace_id = ?", id, workspaceID).First(&order).Error; err != nil {
 			return err
@@ -313,7 +317,10 @@ func updateCostedOrder(c *gin.Context) {
 			}
 			kept = append(kept, items[i].ID)
 		}
-		return tx.Where("order_id = ? AND id NOT IN ?", order.ID, kept).Delete(&models.OrderItem{}).Error
+		if err := tx.Where("order_id = ? AND id NOT IN ?", order.ID, kept).Delete(&models.OrderItem{}).Error; err != nil {
+			return err
+		}
+		return services.SyncCookingOrder(tx, workspaceID, c.MustGet("userID").(uint), order.ID, order.Status, false)
 	})
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		c.JSON(404, gin.H{"error": "Order not found"})
