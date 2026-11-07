@@ -252,10 +252,18 @@ func (s CookingService) Results(id uint, input models.CookingResultInput) (json.
 		for _, f := range run.Plan.Flavors {
 			names[f.RecipeID] = f.Name
 		}
+		outputSources := make([]models.CookingStockUse, 0, len(output))
 		for _, v := range output {
 			lot := models.CookingStockLot{WorkspaceID: s.WorkspaceID, RunID: run.ID, Kind: "bulk", RecipeID: v.RecipeID, Name: names[v.RecipeID], Quantity: v.QuantityG, Reserved: "0", Unit: "g", Composition: []models.CookingComponent{{RecipeID: v.RecipeID, QuantityG: "1"}}}
 			if e = tx.Create(&lot).Error; e != nil {
 				return 0, e
+			}
+			quantity, err := stockNumber(v.QuantityG)
+			if err != nil {
+				return 0, err
+			}
+			if quantity.Sign() > 0 {
+				outputSources = append(outputSources, models.CookingStockUse{LotID: lot.ID, Quantity: lot.Quantity})
 			}
 		}
 		run.ActualOutput = output
@@ -265,7 +273,13 @@ func (s CookingService) Results(id uint, input models.CookingResultInput) (json.
 			return 0, e
 		}
 		if input.Packing != nil {
-			if e = s.applyPacking(tx, &run, *input.Packing); e != nil {
+			packing := *input.Packing
+			if len(packing.Sources) > 0 {
+				// Preview combines explicit external sources with this new output.
+				// Its new lot IDs are server-owned and cannot be selected by the caller.
+				packing.Sources = append(append([]models.CookingStockUse(nil), packing.Sources...), outputSources...)
+			}
+			if e = s.applyPacking(tx, &run, packing); e != nil {
 				return 0, e
 			}
 		}

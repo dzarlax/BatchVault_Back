@@ -2,6 +2,7 @@ package services
 
 import (
 	"encoding/json"
+	"math/big"
 	"testing"
 
 	"github.com/google/uuid"
@@ -80,6 +81,53 @@ func cookingFlavorAmount(t *testing.T, plan models.CookingPlan, recipeID uint) s
 	}
 	t.Fatalf("recipe %d is missing from plan", recipeID)
 	return ""
+}
+
+func TestCookingAtomicFirstPackingIncludesOutputWithExplicitExternalSources(t *testing.T) {
+	service, _ := cookingStoreFixture(t, false)
+	external := addCookingOpeningLot(t, service, 1, 0, "100")
+	run := storeRun(t, service)
+	output := []models.CookingComponent{{RecipeID: 1, QuantityG: "100"}, {RecipeID: 2, QuantityG: "0"}, {RecipeID: 3, QuantityG: "0"}}
+	packing := models.CookingPackingInput{
+		Sources:       []models.CookingStockUse{{LotID: external.ID, Quantity: "100"}},
+		Lines:         []models.CookingPackingLineInput{{ProductID: 101, Quantity: 2}},
+		ActualUsableG: output,
+	}
+	preview, err := service.PackingPreview(run.ID, packing)
+	if err != nil || preview.TotalPacks != 2 {
+		t.Fatalf("two-pack preview failed: %+v %v", preview, err)
+	}
+	request := models.CookingResultInput{
+		Version: run.Version, StockVersion: run.StockVersion, OperationID: uuid.NewString(),
+		ActualUsableG: output, Packing: &packing,
+	}
+	body, err := service.Results(run.ID, request)
+	saved := cookingRunFromResult(t, body, err)
+	if saved.State != "cooked" {
+		t.Fatalf("output state = %s", saved.State)
+	}
+	assertBulk(t, service, map[uint]string{1: "0.000", 2: "0.000", 3: "0.000"})
+	stock, err := service.Stock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var packs string
+	for _, lot := range stock.Lots {
+		if lot.Kind == "packaged" && lot.ProductID == 101 {
+			packs = lot.Quantity
+		}
+	}
+	quantity, err := stockNumber(packs)
+	if err != nil || quantity.Cmp(big.NewRat(2, 1)) != 0 {
+		t.Fatalf("saved packages = %s, want 2", packs)
+	}
+	if len(request.Packing.Sources) != 1 || request.Packing.Sources[0].LotID != external.ID {
+		t.Fatal("saving mutated the submitted source list")
+	}
+	replay, err := service.Results(run.ID, request)
+	if err != nil || !equalCookingJSON(body, replay) {
+		t.Fatalf("atomic result replay changed: %v", err)
+	}
 }
 
 func TestCookingConsumedPackageCoverageDoesNotFollowReplacedOrderProduct(t *testing.T) {
