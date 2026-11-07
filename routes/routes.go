@@ -36,6 +36,22 @@ func SetupRoutes(router *gin.Engine) {
 			protectedRoutes.PATCH("/workspaces/current", controllers.UpdateCurrentWorkspaceCurrency)
 		}
 
+		// Cooking uses quantity-only previews and an independent inventory ledger.
+		protectedRoutes.POST("/cooking/plan-preview", controllers.PreviewCookingPlan)
+		protectedRoutes.POST("/cooking/preparation-preview", controllers.PreviewCookingPreparation)
+		protectedRoutes.GET("/cooking/operations/:operation_id", controllers.GetCookingOperation)
+		protectedRoutes.GET("/cooking-runs", controllers.ListCookingRuns)
+		protectedRoutes.POST("/cooking-runs", controllers.CreateCookingRun)
+		protectedRoutes.GET("/cooking-runs/:id", controllers.GetCookingRun)
+		protectedRoutes.PUT("/cooking-runs/:id/plan", controllers.ReplanCookingRun)
+		protectedRoutes.PUT("/cooking-runs/:id/preparation", controllers.SaveCookingPreparation)
+		protectedRoutes.POST("/cooking-runs/:id/packing-preview", controllers.PreviewCookingPacking)
+		protectedRoutes.POST("/cooking-runs/:id/results", controllers.SaveCookingResult)
+		protectedRoutes.POST("/cooking-runs/:id/packings", controllers.SaveCookingPacking)
+		protectedRoutes.POST("/cooking-runs/:id/archive", controllers.ArchiveCookingRun)
+		protectedRoutes.GET("/cooking-stock", controllers.GetCookingStock)
+		protectedRoutes.POST("/cooking-stock/adjustments", controllers.AdjustCookingStock)
+
 		// Recipe routes
 		protectedRoutes.GET("/recipes", controllers.GetRecipes)
 		protectedRoutes.GET("/recipes/:id", controllers.GetRecipe)

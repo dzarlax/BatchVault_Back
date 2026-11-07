@@ -75,7 +75,7 @@ func AddIngredientToRecipe(c *gin.Context) {
 		Unit:         requestData.Unit,
 	}
 
-	if err := database.DB.Create(&newRecipeIngredient).Error; err != nil {
+	if err := database.RecipeCookingMutation(database.DB, workspaceID, uint(recipeID), func(tx *gorm.DB) error { return tx.Create(&newRecipeIngredient).Error }); err != nil {
 		log.Printf("Failed to add ingredient to recipe: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to add ingredient to recipe"})
 		return
@@ -120,7 +120,9 @@ func DeleteIngredientFromRecipe(c *gin.Context) {
 		return
 	}
 
-	if err := database.DB.Where("recipe_id = ? AND ingredient_id = ?", recipeID, ingredientID).Delete(&models.RecipeIngredient{}).Error; err != nil {
+	if err := database.RecipeCookingMutation(database.DB, workspaceID, uint(recipeID), func(tx *gorm.DB) error {
+		return tx.Where("recipe_id = ? AND ingredient_id = ?", recipeID, ingredientID).Delete(&models.RecipeIngredient{}).Error
+	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete ingredient from recipe"})
 		return
 	}

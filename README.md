@@ -299,3 +299,12 @@ Indexes are created automatically - no manual setup required.
 ## License
 
 [Add your license information here]
+
+## Cooking and finished stock
+
+The optional `COOKING_ENABLED=true` capability enables new multi-flavor cooking
+plans and finished-stock entry. It defaults to false. Existing cooking records,
+operation recovery, stock reconciliation, and order inventory hooks remain
+available when disabled so rollback cannot silently lose reservations or issues.
+See [the cooking v1 contract](docs/cooking-v1.md) for endpoints, quantities,
+transaction rules, migration and verification.

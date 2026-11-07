@@ -17,6 +17,7 @@ import (
 
 // WorkspaceResponse represents a workspace available to the authenticated user.
 type WorkspaceCapabilities struct {
+	CookingV1      bool `json:"cooking_v1"`
 	ProductTypesV1 bool `json:"product_types_v1"`
 }
 
@@ -24,7 +25,7 @@ func productTypesEnabled() bool {
 	return !strings.EqualFold(strings.TrimSpace(os.Getenv("PRODUCT_TYPES_V1_ENABLED")), "false")
 }
 func workspaceCapabilities() WorkspaceCapabilities {
-	return WorkspaceCapabilities{ProductTypesV1: productTypesEnabled()}
+	return WorkspaceCapabilities{ProductTypesV1: productTypesEnabled(), CookingV1: CookingEnabled()}
 }
 
 type WorkspaceResponse struct {

@@ -27,6 +27,10 @@ func costConflict(code, message string) error {
 	return &costingHTTPError{http.StatusConflict, code, message}
 }
 func writeCostingError(c *gin.Context, err error, fallback string) {
+	if errors.Is(err, errCookingReadOnly) {
+		cookingFailure(c, err)
+		return
+	}
 	var e *costingHTTPError
 	if errors.As(err, &e) {
 		c.JSON(e.status, gin.H{"error": e.message, "code": e.code})
